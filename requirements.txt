@@ -1,0 +1,7 @@
+pandas
+scikit-learn
+transformers
+torch
+spacy
+networkx
+pgmpy
