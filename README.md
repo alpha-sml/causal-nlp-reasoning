@@ -8,6 +8,12 @@ This project investigates the capability of natural language processing systems 
 
 - `00_setup.ipynb`: Shared setup notebook for downloading, inspecting, and exporting the Corr2Cause dataset splits into `data/raw/` and `data/processed/`.
 
+## Dataset
+
+This project uses the [Corr2Cause dataset](https://huggingface.co/datasets/causal-nlp/corr2cause), sourced from Hugging Face. It is used to investigate causal reasoning in natural language by evaluating whether causal hypotheses follow from correlational and conditional-independence premises.
+
+Dataset loading, inspection, validation, and export are handled in [`00_setup.ipynb`](00_setup.ipynb). The notebook prepares the data for subsequent feature engineering and model development.
+
 ## Directory Structure
 
 - `AML/`: Workflows exploring classical machine learning methods, linguistic feature extraction, causal entity extraction, and syntactic pattern analysis.
