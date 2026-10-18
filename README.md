@@ -1,19 +1,53 @@
 # Causal NLP Reasoning
 
-Project structure for extracting causal relationships from natural-language documents and building a neuro-symbolic causal graph.
+Investigating causal reasoning in natural language using classical machine learning and deep learning approaches on the Corr2Cause benchmark.
 
-## Structure
+## Overview
+
+This project investigates the capability of natural language processing systems to perform causal reasoning by determining whether causal hypotheses logically follow from correlational and conditional independence premises.
+
+- `00_setup.ipynb`: Shared setup notebook for downloading, inspecting, and exporting the Corr2Cause dataset splits into `data/raw/` and `data/processed/`.
+
+## Directory Structure
+
+- `AML/`: Workflows exploring classical machine learning methods, linguistic feature extraction, causal entity extraction, and syntactic pattern analysis.
+- `DL/`: Workflows exploring deep learning methods, tokenization pipelines, neural baselines, and transformer fine-tuning.
+- `data/`: Local storage for raw and processed Corr2Cause dataset files.
 
 ```text
 causal-nlp-reasoning/
+├── 00_setup.ipynb
+├── AML/
+│   ├── AML_01_data_features.ipynb
+│   ├── AML_02_ner.ipynb
+│   ├── AML_03_dependency_patterns.ipynb
+│   ├── AML_04_classical_classifier.ipynb
+│   └── AML_05_integration_evaluation.ipynb
+├── DL/
+│   ├── DL_01_data_pipeline.ipynb
+│   ├── DL_02_baseline_models.ipynb
+│   ├── DL_03_transformer_models.ipynb
+│   ├── DL_04_training_optimization.ipynb
+│   └── DL_05_integration_evaluation.ipynb
 ├── data/
-│   ├── raw/                       # Store the Corr2Cause dataset or chosen alternative
-│   └── processed/                 # Documents split before extraction to prevent text leakage
-├── 01_feature_engineering.ipynb   # Entity schema definition, alias deduplication, and data splitting
-├── 02_aml_baseline.ipynb          # Dependency patterns, NER, and lightweight relation classifier
-├── 03_dl_pipeline.ipynb           # Fine-tuning DistilBERT or instruction model for pair labeling
-├── 04_neuro_symbolic.ipynb        # Construct DAG, reject self-loops, and fit pgmpy Bayesian network
-├── 05_final_submission.ipynb      # Reproducible notebook visualizing the DAG, comparing methods, and testing queries
-├── requirements.txt               # pandas, scikit-learn, transformers, torch, spacy, networkx, pgmpy
+│   ├── raw/
+│   └── processed/
+├── requirements.txt
 └── README.md
 ```
+
+## Notebooks
+
+### Classical Machine Learning (`AML/`)
+- `AML_01_data_features.ipynb`: Dataset inspection and feature extraction definition for classical models.
+- `AML_02_ner.ipynb`: Variable and entity extraction analysis for abstract causal symbols.
+- `AML_03_dependency_patterns.ipynb`: Syntactic dependency and linguistic causal pattern mining.
+- `AML_04_classical_classifier.ipynb`: Classical machine learning baseline model training and evaluation.
+- `AML_05_integration_evaluation.ipynb`: Classical pipeline integration and final test set evaluation.
+
+### Deep Learning (`DL/`)
+- `DL_01_data_pipeline.ipynb`: Dataset tokenization and tensor data pipeline preparation.
+- `DL_02_baseline_models.ipynb`: Recurrent and feedforward neural baseline architectures.
+- `DL_03_transformer_models.ipynb`: Pretrained transformer fine-tuning for sequence classification.
+- `DL_04_training_optimization.ipynb`: Training optimization, regularization, and hyperparameter tuning.
+- `DL_05_integration_evaluation.ipynb`: Deep learning integration, cross-model comparison, and final test evaluation.

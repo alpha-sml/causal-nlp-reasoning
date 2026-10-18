@@ -1,0 +1,18 @@
+# Python and environment artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+.env
+.venv
+env/
+venv/
+
+# macOS metadata
+.DS_Store
+
+# Generated datasets
+data/raw/*.csv
+data/processed/*.csv
+!data/raw/.gitkeep
+!data/processed/.gitkeep
