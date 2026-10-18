@@ -38,6 +38,8 @@ causal-nlp-reasoning/
 
 ## Notebooks
 
+The AML and DL notebooks currently contain structural placeholders outlining planned work across each phase.
+
 ### Classical Machine Learning (`AML/`)
 - `AML_01_data_features.ipynb`: Dataset inspection and feature extraction definition for classical models.
 - `AML_02_ner.ipynb`: Variable and entity extraction analysis for abstract causal symbols.

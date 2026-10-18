@@ -5,3 +5,4 @@ torch
 spacy
 networkx
 pgmpy
+datasets
