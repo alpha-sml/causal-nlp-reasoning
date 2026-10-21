@@ -121,6 +121,7 @@ The table below delineates the dependencies declared in `requirements.txt`, the 
 | Package | Declared in `requirements.txt` | Pipeline Role | Tested Active Version | Clean Fresh Venv Version | Release Type / Binary Wheel Status |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`pandas`** | `>=2.2.0` | Active (`00_setup`, `01_eda`, `AML_01`–`03`) | `3.0.1` | `3.0.6` | PyPI standard release binary wheel |
+| **`numpy`** | `>=1.26.0` | Active (`01_eda`, `AML_01`–`03`) | `2.4.2` | `2.4.2` | PyPI standard release binary wheel |
 | **`datasets`** | `>=2.19.0` | Active (`00_setup`) | `5.1.0` | `5.1.0` | PyPI standard release wheel |
 | **`networkx`** | `>=3.0` | Active (`AML_03`) | `3.7` | `3.7` | PyPI standard release wheel |
 | **`matplotlib`** | `>=3.8.0` | Active (`01_eda`) | `3.11.1` | `3.11.2` | PyPI standard release binary wheel |
@@ -128,7 +129,7 @@ The table below delineates the dependencies declared in `requirements.txt`, the 
 | **`scipy`** | `>=1.12.0` | Active (`01_eda`, `AML_01`) | `1.18.1` | `1.18.1` | PyPI standard release binary wheel |
 | **`ipykernel`** | `>=6.29.0` | Active (Jupyter notebook execution) | `7.2.0` | `7.4.0` | PyPI standard release binary wheel |
 | **`spacy`** | `>=3.7.0` | Active (`AML_02`, `AML_03`) | `3.8.16` | `3.8.16` | PyPI standard release binary wheel (`en_core_web_sm 3.8.0` verified; fallback regex available) |
-| **`scikit-learn`** | `>=1.4.0` | Planned (`AML_04_classical_classifier.ipynb`) | `1.9.0` | `1.9.1` | PyPI standard release binary wheel |
+| **`scikit-learn`** | `>=1.4.0` | Active (`01_eda` shortcut diagnostics) & Planned (`AML_04`) | `1.9.0` | `1.9.1` | PyPI standard release binary wheel |
 | **`transformers`** | `>=4.40.0` | Planned (`DL/DL_03_transformer_models.ipynb`) | `5.20.2` | `5.20.2` | PyPI standard release wheel |
 | **`torch`** | `>=2.2.0` | Planned (`DL/DL_01`–`05` deep learning) | `2.14.1` | `2.14.1` | PyPI standard release binary wheel (`cp314-cp314-macosx_14_0_arm64`, MPS verified) |
 | **`pgmpy`** | `>=0.1.25` | Planned (`AML_05_integration_evaluation.ipynb`)| `1.1.2` | `1.1.2` | PyPI standard release wheel |
@@ -136,10 +137,10 @@ The table below delineates the dependencies declared in `requirements.txt`, the 
 ### Detailed Dependency Notes & Platform Verification Scope
 
 1. **Active vs. Planned Module Separation**:
-   - **Active Dependencies**: The five currently implemented and executed notebooks (`00_setup.ipynb`, `01_eda.ipynb`, `AML_01_data_features.ipynb`, `AML_02_ner.ipynb`, and `AML_03_dependency_patterns.ipynb`) actively import and execute only: `pandas`, `numpy`, `datasets`, `networkx`, `matplotlib`, `seaborn`, `scipy`, `ipykernel`, and `spacy` (with deterministic fallback).
-   - **Planned Dependencies**: The heavier ML/DL dependencies—`torch`, `transformers`, `scikit-learn`, and `pgmpy`—are declared in `requirements.txt` to prepare for subsequent modules (`AML_04`, `AML_05`, and `DL/`). While they install cleanly and import without errors, they are **not** invoked in the currently active data preparation and feature extraction notebooks.
+   - **Active Dependencies**: The five currently implemented and executed notebooks (`00_setup.ipynb`, `01_eda.ipynb`, `AML_01_data_features.ipynb`, `AML_02_ner.ipynb`, and `AML_03_dependency_patterns.ipynb`) actively import and execute: `pandas`, `numpy`, `datasets`, `networkx`, `matplotlib`, `seaborn`, `scipy`, `scikit-learn` (used in `01_eda` for diagnostic shortcut baselines: DummyClassifier and DecisionTreeClassifier), `ipykernel`, and `spacy` (with deterministic fallback).
+   - **Planned Dependencies**: The heavier ML/DL dependencies—`torch`, `transformers`, and `pgmpy` (as well as extended `scikit-learn` estimators in `AML_04`)—are declared in `requirements.txt` to prepare for subsequent modules (`AML_04`, `AML_05`, and `DL/`). While they install cleanly and import without errors, they are **not** invoked in the currently active data preparation and feature extraction notebooks.
 2. **Release Status & Pre-Release Packages**:
-   - All 12 primary packages declared in `requirements.txt` are official, standard releases available from PyPI. None of the primary dependencies require experimental, development, or nightly (`dev`) builds on Python 3.14.
+   - All 13 primary packages declared in `requirements.txt` are official, standard releases available from PyPI. None of the primary dependencies require experimental, development, or nightly (`dev`) builds on Python 3.14.
    - Across the transitive dependency graph resolved during clean installation, exactly one indirect package was installed as a release candidate: `wrapt==2.5.2rc1` (an indirect C-extension dependency required by `smart-open` for `weasel`/`spacy`).
 3. **Fresh Environment Verification Evidence**:
    - A clean, isolated Python 3.14.2 virtual environment was created from scratch without inherited packages (`scratch/fresh_venv`).
