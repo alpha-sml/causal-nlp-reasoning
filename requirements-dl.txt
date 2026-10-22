@@ -1,0 +1,7 @@
+# Optional Deep Learning Pipeline Dependencies (DL_01 to DL_05)
+# Note: Install torch and transformers when executing the DL/ workflows.
+# For macOS Apple Silicon (arm64), torch includes MPS acceleration.
+
+torch>=2.2.0
+transformers>=4.40.0
+accelerate>=0.30.0

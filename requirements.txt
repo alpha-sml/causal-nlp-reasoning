@@ -1,6 +1,6 @@
 # Target Runtime: Python 3.14 (tested on Python 3.14.2 macOS arm64)
 
-# Active pipeline dependencies (00_setup, 01_eda, AML_01, AML_02, AML_03)
+# Active pipeline dependencies (00_setup, 01_eda, AML_01, AML_02, AML_03, AML_04)
 pandas>=2.2.0
 numpy>=1.26.0
 datasets>=2.19.0
@@ -11,8 +11,12 @@ scipy>=1.12.0
 scikit-learn>=1.4.0
 ipykernel>=6.29.0
 spacy>=3.7.0
-
-# Planned future module dependencies (AML_04 classical ML, AML_05 causal DAGs, DL_01-05)
-transformers>=4.40.0
-torch>=2.2.0
 pgmpy>=0.1.25
+nbclient>=0.10.0
+nbformat>=5.9.0
+
+# Note: spaCy English pipeline must be downloaded after package installation:
+# python -m spacy download en_core_web_sm
+#
+# Deep learning dependencies for DL/ notebooks are separated into:
+# requirements-dl.txt

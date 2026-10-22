@@ -11,8 +11,13 @@ venv/
 # macOS metadata
 .DS_Store
 
-# Generated datasets
-data/raw/*.csv
-data/processed/*.csv
+# Temporary staging and backup files
+*.tmp
+*.tmp.*
+*.bak
+
+# Generated and downloaded datasets
+data/raw/*
 !data/raw/.gitkeep
+data/processed/*
 !data/processed/.gitkeep
