@@ -17,6 +17,7 @@ Key capabilities:
 
 from typing import Dict, Any, List, Optional, Tuple, Set
 import re
+import networkx as nx
 import pandas as pd
 import spacy
 
@@ -163,6 +164,78 @@ def extract_lexical_relation(
     return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "no_pattern_matched"}
 
 
+def compute_shortest_dependency_path(
+    arg1_text: str,
+    arg2_text: str,
+    between_text: str,
+    arg1_before_arg2: int = 1,
+    nlp=None,
+    doc=None
+) -> Dict[str, Any]:
+    """Compute shortest syntactic dependency path (SDP) between candidate argument heads.
+
+    Constructs an undirected graph over spaCy token-level syntactic dependency arcs
+    for the reconstructed candidate window, identifies the head tokens of arg1 and arg2,
+    and extracts the shortest dependency path (Bunescu & Mooney, 2005).
+    """
+    if doc is None:
+        if not arg1_text or pd.isna(arg1_text) or not arg2_text or pd.isna(arg2_text):
+            return {"sdp_length": -1, "sdp_tokens": [], "sdp_lemmas": [], "sdp_dep_labels": [], "sdp_has_causal_lemma": False}
+        if nlp is None:
+            nlp = get_spacy_nlp()
+        first_arg = str(arg1_text).strip() if arg1_before_arg2 else str(arg2_text).strip()
+        second_arg = str(arg2_text).strip() if arg1_before_arg2 else str(arg1_text).strip()
+        btw = "" if (between_text is None or pd.isna(between_text)) else str(between_text)
+        text = f"{first_arg} {btw} {second_arg}"
+        doc = nlp(text[:300])
+
+    if len(doc) == 0:
+        return {"sdp_length": -1, "sdp_tokens": [], "sdp_lemmas": [], "sdp_dep_labels": [], "sdp_has_causal_lemma": False}
+
+    first_arg_str = str(arg1_text).strip() if arg1_before_arg2 else str(arg2_text).strip()
+    first_char_end = len(first_arg_str)
+    full_str = doc.text
+    second_arg_str = str(arg2_text).strip() if arg1_before_arg2 else str(arg1_text).strip()
+    second_char_start = max(first_char_end, len(full_str) - len(second_arg_str))
+
+    first_tokens = [t for t in doc if t.idx < first_char_end] or [doc[0]]
+    second_tokens = [t for t in doc if t.idx >= second_char_start] or [doc[-1]]
+
+    # Select syntactic head of each argument span (token whose head is outside the span, or last token)
+    first_set = set(t.i for t in first_tokens)
+    second_set = set(t.i for t in second_tokens)
+    head1 = next((t for t in first_tokens if t.head.i not in first_set), first_tokens[-1])
+    head2 = next((t for t in second_tokens if t.head.i not in second_set), second_tokens[-1])
+
+    G_dep = nx.Graph()
+    for token in doc:
+        G_dep.add_node(token.i)
+        if token.head.i != token.i:
+            G_dep.add_edge(token.i, token.head.i, dep=token.dep_)
+
+    if nx.has_path(G_dep, head1.i, head2.i):
+        path_indices = nx.shortest_path(G_dep, source=head1.i, target=head2.i)
+        sdp_tokens = [doc[i].text for i in path_indices]
+        sdp_lemmas = [doc[i].lemma_.lower() for i in path_indices]
+        sdp_dep_labels = [doc[i].dep_ for i in path_indices]
+        has_causal = any(lem in CAUSAL_LEMMAS for lem in sdp_lemmas)
+        return {
+            "sdp_length": len(path_indices) - 1,
+            "sdp_tokens": sdp_tokens,
+            "sdp_lemmas": sdp_lemmas,
+            "sdp_dep_labels": sdp_dep_labels,
+            "sdp_has_causal_lemma": has_causal
+        }
+
+    return {
+        "sdp_length": -1,
+        "sdp_tokens": [],
+        "sdp_lemmas": [],
+        "sdp_dep_labels": [],
+        "sdp_has_causal_lemma": any(t.lemma_.lower() in CAUSAL_LEMMAS for t in doc)
+    }
+
+
 def extract_dependency_relation(
     arg1_text: str,
     arg2_text: str,
@@ -174,18 +247,9 @@ def extract_dependency_relation(
     """Extract causal relation using spaCy syntactic dependency parse trees.
 
     Identifies verbal causal predicates (from CAUSAL_LEMMAS), active vs passive voice
-    (using agent, by, nsubjpass, and prepositional from dependents), and enforces
+    (using agent, by, nsubjpass, and prepositional from dependents), computes the
+    Shortest Dependency Path (SDP) between candidate argument heads, and enforces
     directional correctness matching the candidate pair convention.
-
-    Methodological Scope & Documented Limitations:
-    - Analyzes local dependency trees for candidate mentions within max_between_chars window.
-    - Evaluates explicit passive voice inversion and causal directionality.
-    - Syntactic Relationship Scope: The extractor inspects syntactic child dependencies
-      (voice, agent, passive subjects) on the causal predicate token within the
-      reconstructed mention-window text[:300], rather than verifying complete end-to-end
-      dependency parse paths connecting the candidate entity heads to the predicate.
-    - Non-verbal discourse cues (e.g. 'because', 'therefore') are not verbal predicates
-      and are handled by lexical/hybrid extractors rather than dependency trees.
     """
     if not arg1_text or pd.isna(arg1_text) or not arg2_text or pd.isna(arg2_text):
         return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "empty_argument"}
@@ -205,14 +269,21 @@ def extract_dependency_relation(
         
     text = f"{arg1_text} {between_text} {arg2_text}" if arg1_before_arg2 else f"{arg2_text} {between_text} {arg1_text}"
     doc = nlp(text[:300])
+    sdp_info = compute_shortest_dependency_path(arg1_text, arg2_text, between_text, arg1_before_arg2, nlp=nlp, doc=doc)
     
     # Check negation
     if any(tok.dep_ == "neg" or tok.lower_ in NEG_CUES for tok in doc):
-        return {"is_causal": 0, "pred_directed": 0, "is_negated": True, "rejection_reason": "negation_detected"}
+        return {
+            "is_causal": 0, "pred_directed": 0, "is_negated": True,
+            "rejection_reason": "negation_detected", **sdp_info
+        }
         
     # Check correlation control
     if any(tok.lemma_ in {"correlate", "associate"} for tok in doc) and not any(tok.lemma_ in CAUSAL_LEMMAS for tok in doc):
-        return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "correlation_not_causation"}
+        return {
+            "is_causal": 0, "pred_directed": 0,
+            "rejection_reason": "correlation_not_causation", **sdp_info
+        }
         
     has_uncertainty = any(tok.lemma_ in {"may", "might", "could", "suggest", "possible"} for tok in doc)
     confidence = 0.70 if has_uncertainty else 0.90
@@ -234,7 +305,7 @@ def extract_dependency_relation(
                         "is_causal": 1, "pred_directed": 0, "cause": str(arg2_text), "effect": str(arg1_text),
                         "direction": "arg2->arg1", "method": "dependency_passive",
                         "trigger_text": token.text, "confidence": confidence,
-                        "has_uncertainty": has_uncertainty
+                        "has_uncertainty": has_uncertainty, **sdp_info
                     }
                 else:
                     # arg2 is first (Effect), arg1 is second (Cause) -> relation is arg1 -> arg2
@@ -242,7 +313,7 @@ def extract_dependency_relation(
                         "is_causal": 1, "pred_directed": 1, "cause": str(arg1_text), "effect": str(arg2_text),
                         "direction": "arg1->arg2", "method": "dependency_passive",
                         "trigger_text": token.text, "confidence": confidence,
-                        "has_uncertainty": has_uncertainty
+                        "has_uncertainty": has_uncertainty, **sdp_info
                     }
             else:
                 # Active order: Cause [verb] Effect
@@ -252,7 +323,7 @@ def extract_dependency_relation(
                         "is_causal": 1, "pred_directed": 1, "cause": str(arg1_text), "effect": str(arg2_text),
                         "direction": "arg1->arg2", "method": "dependency_active",
                         "trigger_text": token.text, "confidence": confidence,
-                        "has_uncertainty": has_uncertainty
+                        "has_uncertainty": has_uncertainty, **sdp_info
                     }
                 else:
                     # arg2 is first (Cause), arg1 is second (Effect) -> relation is arg2 -> arg1
@@ -260,10 +331,80 @@ def extract_dependency_relation(
                         "is_causal": 1, "pred_directed": 0, "cause": str(arg2_text), "effect": str(arg1_text),
                         "direction": "arg2->arg1", "method": "dependency_active",
                         "trigger_text": token.text, "confidence": confidence,
-                        "has_uncertainty": has_uncertainty
+                        "has_uncertainty": has_uncertainty, **sdp_info
                     }
                 
-    return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "no_causal_lemma_found"}
+    return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "no_causal_lemma_found", **sdp_info}
+
+
+def enforce_dag_acyclicity(
+    G: nx.DiGraph,
+    weight_attr: str = "score"
+) -> Tuple[nx.DiGraph, List[Dict[str, Any]]]:
+    """Deterministically enforce DAG acyclicity by pruning self-loops, bidirectional
+    conflicts, and minimum-confidence feedback edges in directed cycles.
+
+    Returns:
+      - G_dag: A guaranteed acyclic copy of G (`nx.is_directed_acyclic_graph(G_dag) == True`)
+      - audit_log: List of dictionaries documenting every pruned edge and reason.
+    """
+    G_dag = G.copy()
+    audit_log: List[Dict[str, Any]] = []
+
+    def _edge_weight(graph: nx.DiGraph, u: str, v: str) -> float:
+        data = graph[u][v]
+        if weight_attr in data and data[weight_attr] is not None:
+            return float(data[weight_attr])
+        if "confidence" in data and data["confidence"] is not None:
+            return float(data["confidence"])
+        return 1.0
+
+    # 1. Remove self-loops
+    for u, v in list(nx.selfloop_edges(G_dag)):
+        w = _edge_weight(G_dag, u, v)
+        G_dag.remove_edge(u, v)
+        audit_log.append({"u": u, "v": v, "weight": w, "reason": "self_loop"})
+
+    # 2. Resolve bidirectional 2-cycles (u <-> v) deterministically
+    visited_pairs = set()
+    for u, v in list(G_dag.edges()):
+        if (u, v) in visited_pairs or (v, u) in visited_pairs:
+            continue
+        if G_dag.has_edge(u, v) and G_dag.has_edge(v, u):
+            visited_pairs.add((u, v))
+            w_uv = _edge_weight(G_dag, u, v)
+            w_vu = _edge_weight(G_dag, v, u)
+            # Break ties deterministically by lexicographical node order
+            if (w_uv < w_vu) or (w_uv == w_vu and str(u) > str(v)):
+                G_dag.remove_edge(u, v)
+                audit_log.append({"u": u, "v": v, "weight": w_uv, "reason": "bidirectional_conflict_lower_confidence"})
+            else:
+                G_dag.remove_edge(v, u)
+                audit_log.append({"u": v, "v": u, "weight": w_vu, "reason": "bidirectional_conflict_lower_confidence"})
+
+    # 3. Iteratively break remaining multi-node directed cycles
+    while not nx.is_directed_acyclic_graph(G_dag):
+        cycles = sorted(nx.simple_cycles(G_dag), key=lambda c: (len(c), [str(n) for n in c]))
+        if not cycles:
+            break
+        cycle = cycles[0]
+        cycle_edges = [(cycle[i], cycle[(i + 1) % len(cycle)]) for i in range(len(cycle))]
+        # Select edge with lowest weight; break ties deterministically by edge tuple
+        min_u, min_v = min(
+            cycle_edges,
+            key=lambda e: (_edge_weight(G_dag, e[0], e[1]), str(e[0]), str(e[1]))
+        )
+        w_min = _edge_weight(G_dag, min_u, min_v)
+        G_dag.remove_edge(min_u, min_v)
+        audit_log.append({
+            "u": min_u,
+            "v": min_v,
+            "weight": w_min,
+            "cycle_length": len(cycle),
+            "reason": "directed_cycle_feedback_edge"
+        })
+
+    return G_dag, audit_log
 
 
 def extract_hybrid_relation(

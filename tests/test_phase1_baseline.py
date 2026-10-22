@@ -49,6 +49,8 @@ from causal_extractors import (
     extract_dependency_relation,
     extract_hybrid_relation,
     build_extracted_records,
+    compute_shortest_dependency_path,
+    enforce_dag_acyclicity,
 )
 
 SCHEMA_COLUMNS = [
@@ -298,6 +300,47 @@ class TestPhase1ExtractorUnitTests(unittest.TestCase):
         self.assertEqual(r_neg["pred_directed"], 0)
         self.assertEqual(r_neg["rejection_reason"], "negation_detected")
 
+    def test_05c_shortest_dependency_path_extraction(self):
+        """Verify shortest dependency path (SDP) computation across active and passive causal sentences."""
+        sdp_act = compute_shortest_dependency_path(
+            "PmrB kinase", "PmrA response regulator", " directly activates ", arg1_before_arg2=1
+        )
+        self.assertGreater(sdp_act["sdp_length"], 0)
+        self.assertTrue(sdp_act["sdp_has_causal_lemma"])
+        self.assertIn("activate", sdp_act["sdp_lemmas"])
+
+        sdp_pass = compute_shortest_dependency_path(
+            "PmrB phosphorylation", "Resistance to polymyxin", " is caused by ", arg1_before_arg2=0
+        )
+        self.assertGreater(sdp_pass["sdp_length"], 0)
+        self.assertTrue(sdp_pass["sdp_has_causal_lemma"])
+        self.assertIn("cause", sdp_pass["sdp_lemmas"])
+
+    def test_05d_deterministic_dag_cycle_breaking(self):
+        """Verify enforce_dag_acyclicity resolves self-loops, 2-cycles, and 3-cycles deterministically."""
+        import networkx as nx
+        G_cyclic = nx.DiGraph()
+        # Self-loop
+        G_cyclic.add_edge("PmrA", "PmrA", score=0.99)
+        # Bidirectional 2-cycle: X -> Y (0.91) vs Y -> X (0.42)
+        G_cyclic.add_edge("X", "Y", score=0.91)
+        G_cyclic.add_edge("Y", "X", score=0.42)
+        # 3-node feedback loop: A -> B (0.92), B -> C (0.88), C -> A (0.51)
+        G_cyclic.add_edge("A", "B", score=0.92)
+        G_cyclic.add_edge("B", "C", score=0.88)
+        G_cyclic.add_edge("C", "A", score=0.51)
+
+        self.assertFalse(nx.is_directed_acyclic_graph(G_cyclic))
+        G_dag, audit_log = enforce_dag_acyclicity(G_cyclic, weight_attr="score")
+        self.assertTrue(nx.is_directed_acyclic_graph(G_dag))
+        self.assertEqual(len(audit_log), 3)
+        self.assertFalse(G_dag.has_edge("PmrA", "PmrA"))
+        self.assertTrue(G_dag.has_edge("X", "Y"))
+        self.assertFalse(G_dag.has_edge("Y", "X"))
+        self.assertTrue(G_dag.has_edge("A", "B"))
+        self.assertTrue(G_dag.has_edge("B", "C"))
+        self.assertFalse(G_dag.has_edge("C", "A"))
+
 
 # ===========================================================================
 # 2. Corpus Data Integrity & Isolation Tests (Requires BioCause corpus)
@@ -501,9 +544,13 @@ class TestPhase1PathResolutionAndPortability(unittest.TestCase):
                     src = cell.source
                     for pat in forbidden_patterns:
                         if pat in src:
-                            violations.append(f"{nb_rel} cell {idx} contains '{pat}'")
+                            violations.append(f"{nb_rel} cell {idx} source contains '{pat}'")
+                    for out in cell.get("outputs", []):
+                        out_txt = str(out.get("text", ""))
+                        if "/Users/" in out_txt:
+                            violations.append(f"{nb_rel} cell {idx} output contains '/Users/'")
 
-        self.assertEqual(len(violations), 0, f"Machine-specific paths detected in code cells: {violations}")
+        self.assertEqual(len(violations), 0, f"Machine-specific paths detected in cells/outputs: {violations}")
 
 
 # ===========================================================================
@@ -535,6 +582,9 @@ class TestPhase1NotebookValidation(unittest.TestCase):
             md_cells = [c for c in nb.cells if c.cell_type == "markdown"]
             self.assertGreater(len(code_cells), 0, f"{nb_rel} has 0 code cells")
             self.assertGreater(len(md_cells), 0, f"{nb_rel} has 0 markdown cells")
+            for idx, c in enumerate(code_cells):
+                self.assertIsNotNone(c.get("execution_count"), f"{nb_rel} code cell {idx} was not executed")
+                self.assertGreater(len(c.get("outputs", [])), 0, f"{nb_rel} code cell {idx} has no visible outputs")
 
     def test_13_python_syntax_and_imports(self):
         """Verify Python syntax and imports for all active module files."""
