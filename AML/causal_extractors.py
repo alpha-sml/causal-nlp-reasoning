@@ -32,17 +32,26 @@ ACTIVE_CAUSAL_PATTERNS: List[Tuple[str, re.Pattern]] = [
 ]
 
 PASSIVE_CAUSAL_PATTERNS: List[Tuple[str, re.Pattern]] = [
-    ("P_PASSIVE_CAUSE", re.compile(r"(?i)\b(?:is caused by|was caused by|are caused by)\b")),
+    ("P_PASSIVE_CAUSE", re.compile(r"(?i)\b(?:is caused by|was caused by|are caused by|caused by)\b")),
     ("P_PASSIVE_RESULT", re.compile(r"(?i)\b(?:results from|resulted from|resulting from)\b")),
     ("P_PASSIVE_DUE_TO", re.compile(r"(?i)\b(?:is due to|was due to|are due to|due to)\b")),
     ("P_PASSIVE_MEDIATE", re.compile(r"(?i)\b(?:is mediated by|was mediated by|are mediated by)\b")),
 ]
 
-DISCOURSE_PATTERNS: List[Tuple[str, re.Pattern]] = [
+# Forward discourse: (Cause) [cue] (Effect)
+FORWARD_DISCOURSE_PATTERNS: List[Tuple[str, re.Pattern]] = [
     ("P_DISCOURSE_SUGGEST", re.compile(r"(?i)\b(?:suggesting that|indicating that|showing that|which suggests that|suggests that|indicates that)\b")),
-    ("P_DISCOURSE_BECAUSE", re.compile(r"(?i)\b(?:because|since|therefore|thus|hence)\b")),
+    ("P_DISCOURSE_FORWARD", re.compile(r"(?i)\b(?:therefore|thus|hence)\b")),
     ("P_DISCOURSE_REQUIRED", re.compile(r"(?i)\b(?:required for|necessary for|essential for)\b")),
 ]
+
+# Inverted discourse: (Effect) [cue] (Cause)
+INVERTED_DISCOURSE_PATTERNS: List[Tuple[str, re.Pattern]] = [
+    ("P_DISCOURSE_BECAUSE", re.compile(r"(?i)\b(?:because|since)\b")),
+]
+
+# Combined discourse patterns for backward compatibility
+DISCOURSE_PATTERNS: List[Tuple[str, re.Pattern]] = FORWARD_DISCOURSE_PATTERNS + INVERTED_DISCOURSE_PATTERNS
 
 NEGATION_PATTERN: re.Pattern = re.compile(r"(?i)\b(?:not|never|no|failed to|fails to|unable to|without|neither|nor)\b")
 CORRELATION_PATTERN: re.Pattern = re.compile(r"(?i)\b(?:correlated with|associated with|co-occurs with|accompanied by)\b")
@@ -85,16 +94,20 @@ def extract_lexical_relation(
       - direction: 'arg1->arg2' or 'arg2->arg1'
       - method, trigger_text, confidence, has_uncertainty, rejection_reason
     """
-    if not arg1_text or not arg2_text or arg1_text.strip().lower() == arg2_text.strip().lower():
+    if not arg1_text or pd.isna(arg1_text) or not arg2_text or pd.isna(arg2_text):
+        return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "empty_argument"}
+    if str(arg1_text).strip() == "" or str(arg2_text).strip() == "":
+        return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "empty_argument"}
+    if str(arg1_text).strip().lower() == str(arg2_text).strip().lower():
         return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "self_loop"}
-    if between_text is None or pd.isna(between_text) or str(between_text).strip() == "":
+    if between_text is None or pd.isna(between_text) or str(between_text).strip() in {"", "nan"}:
         return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "empty_evidence_text"}
     
     between_text = str(between_text)
     if len(between_text) > max_between_chars:
         return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "distance_window_exceeded"}
         
-    if CORRELATION_PATTERN.search(between_text) and not any(p[1].search(between_text) for p in ACTIVE_CAUSAL_PATTERNS):
+    if CORRELATION_PATTERN.search(between_text) and not any(p[1].search(between_text) for p in ACTIVE_CAUSAL_PATTERNS + PASSIVE_CAUSAL_PATTERNS):
         return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "correlation_not_causation"}
         
     if NEGATION_PATTERN.search(between_text):
@@ -103,14 +116,37 @@ def extract_lexical_relation(
     has_uncertainty = bool(UNCERTAINTY_PATTERN.search(between_text))
     confidence = 0.70 if has_uncertainty else 0.90
     
-    # Active patterns: syntactic ordering is (Cause) [verb] (Effect)
-    for pname, pat in ACTIVE_CAUSAL_PATTERNS + DISCOURSE_PATTERNS:
+    # 1. Passive and inverted discourse patterns: syntactic ordering is (Effect) [cue] (Cause)
+    # Checked FIRST so multi-word passive patterns (e.g. 'is caused by') are not intercepted by active 'caused'.
+    for pname, pat in PASSIVE_CAUSAL_PATTERNS + INVERTED_DISCOURSE_PATTERNS:
+        match = pat.search(between_text)
+        if match:
+            method_type = "lexical_passive" if "PASSIVE" in pname else "lexical_inverted_discourse"
+            if arg1_before_arg2:
+                # arg1 is first in text (Effect), arg2 is second in text (Cause): arg2 -> arg1
+                return {
+                    "is_causal": 1, "pred_directed": 0, "cause": str(arg2_text), "effect": str(arg1_text),
+                    "direction": "arg2->arg1", "method": method_type,
+                    "pattern_name": pname + "_INVERTED", "trigger_text": match.group(0),
+                    "confidence": confidence, "has_uncertainty": has_uncertainty
+                }
+            else:
+                # arg2 is first in text (Effect), arg1 is second in text (Cause): arg1 -> arg2
+                return {
+                    "is_causal": 1, "pred_directed": 1, "cause": str(arg1_text), "effect": str(arg2_text),
+                    "direction": "arg1->arg2", "method": method_type,
+                    "pattern_name": pname, "trigger_text": match.group(0),
+                    "confidence": confidence, "has_uncertainty": has_uncertainty
+                }
+            
+    # 2. Active patterns & forward discourse: syntactic ordering is (Cause) [cue] (Effect)
+    for pname, pat in ACTIVE_CAUSAL_PATTERNS + FORWARD_DISCOURSE_PATTERNS:
         match = pat.search(between_text)
         if match:
             if arg1_before_arg2:
                 # arg1 is before arg2 in text: arg1 -> arg2
                 return {
-                    "is_causal": 1, "pred_directed": 1, "cause": arg1_text, "effect": arg2_text,
+                    "is_causal": 1, "pred_directed": 1, "cause": str(arg1_text), "effect": str(arg2_text),
                     "direction": "arg1->arg2", "method": "lexical_active",
                     "pattern_name": pname, "trigger_text": match.group(0),
                     "confidence": confidence, "has_uncertainty": has_uncertainty
@@ -118,30 +154,9 @@ def extract_lexical_relation(
             else:
                 # arg2 is before arg1 in text: arg2 -> arg1
                 return {
-                    "is_causal": 1, "pred_directed": 0, "cause": arg2_text, "effect": arg1_text,
+                    "is_causal": 1, "pred_directed": 0, "cause": str(arg2_text), "effect": str(arg1_text),
                     "direction": "arg2->arg1", "method": "lexical_active",
                     "pattern_name": pname + "_REVERSED", "trigger_text": match.group(0),
-                    "confidence": confidence, "has_uncertainty": has_uncertainty
-                }
-            
-    # Passive patterns: syntactic ordering is (Effect) [passive verb] (Cause)
-    for pname, pat in PASSIVE_CAUSAL_PATTERNS:
-        match = pat.search(between_text)
-        if match:
-            if arg1_before_arg2:
-                # arg1 is effect, arg2 is cause: arg2 -> arg1
-                return {
-                    "is_causal": 1, "pred_directed": 0, "cause": arg2_text, "effect": arg1_text,
-                    "direction": "arg2->arg1", "method": "lexical_passive",
-                    "pattern_name": pname + "_INVERTED", "trigger_text": match.group(0),
-                    "confidence": confidence, "has_uncertainty": has_uncertainty
-                }
-            else:
-                # arg2 is effect, arg1 is cause: arg1 -> arg2
-                return {
-                    "is_causal": 1, "pred_directed": 1, "cause": arg1_text, "effect": arg2_text,
-                    "direction": "arg1->arg2", "method": "lexical_passive",
-                    "pattern_name": pname, "trigger_text": match.group(0),
                     "confidence": confidence, "has_uncertainty": has_uncertainty
                 }
             
@@ -157,11 +172,28 @@ def extract_dependency_relation(
     nlp=None
 ) -> Dict[str, Any]:
     """Extract causal relation using spaCy syntactic dependency parse trees.
-    Determines grammatical head predicate, active vs passive voice, and directional correctness.
+
+    Identifies verbal causal predicates (from CAUSAL_LEMMAS), active vs passive voice
+    (using agent, by, nsubjpass, and prepositional from dependents), and enforces
+    directional correctness matching the candidate pair convention.
+
+    Methodological Scope & Documented Limitations:
+    - Analyzes local dependency trees for candidate mentions within max_between_chars window.
+    - Evaluates explicit passive voice inversion and causal directionality.
+    - Syntactic Relationship Scope: The extractor inspects syntactic child dependencies
+      (voice, agent, passive subjects) on the causal predicate token within the
+      reconstructed mention-window text[:300], rather than verifying complete end-to-end
+      dependency parse paths connecting the candidate entity heads to the predicate.
+    - Non-verbal discourse cues (e.g. 'because', 'therefore') are not verbal predicates
+      and are handled by lexical/hybrid extractors rather than dependency trees.
     """
-    if not arg1_text or not arg2_text or arg1_text.strip().lower() == arg2_text.strip().lower():
+    if not arg1_text or pd.isna(arg1_text) or not arg2_text or pd.isna(arg2_text):
+        return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "empty_argument"}
+    if str(arg1_text).strip() == "" or str(arg2_text).strip() == "":
+        return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "empty_argument"}
+    if str(arg1_text).strip().lower() == str(arg2_text).strip().lower():
         return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "self_loop"}
-    if between_text is None or pd.isna(between_text) or str(between_text).strip() == "":
+    if between_text is None or pd.isna(between_text) or str(between_text).strip() in {"", "nan"}:
         return {"is_causal": 0, "pred_directed": 0, "rejection_reason": "empty_evidence_text"}
         
     between_text = str(between_text)
@@ -199,7 +231,7 @@ def extract_dependency_relation(
                 if arg1_before_arg2:
                     # arg1 is first (Effect), arg2 is second (Cause) -> relation is arg2 -> arg1
                     return {
-                        "is_causal": 1, "pred_directed": 0, "cause": arg2_text, "effect": arg1_text,
+                        "is_causal": 1, "pred_directed": 0, "cause": str(arg2_text), "effect": str(arg1_text),
                         "direction": "arg2->arg1", "method": "dependency_passive",
                         "trigger_text": token.text, "confidence": confidence,
                         "has_uncertainty": has_uncertainty
@@ -207,7 +239,7 @@ def extract_dependency_relation(
                 else:
                     # arg2 is first (Effect), arg1 is second (Cause) -> relation is arg1 -> arg2
                     return {
-                        "is_causal": 1, "pred_directed": 1, "cause": arg1_text, "effect": arg2_text,
+                        "is_causal": 1, "pred_directed": 1, "cause": str(arg1_text), "effect": str(arg2_text),
                         "direction": "arg1->arg2", "method": "dependency_passive",
                         "trigger_text": token.text, "confidence": confidence,
                         "has_uncertainty": has_uncertainty
@@ -217,7 +249,7 @@ def extract_dependency_relation(
                 if arg1_before_arg2:
                     # arg1 is first (Cause), arg2 is second (Effect) -> relation is arg1 -> arg2
                     return {
-                        "is_causal": 1, "pred_directed": 1, "cause": arg1_text, "effect": arg2_text,
+                        "is_causal": 1, "pred_directed": 1, "cause": str(arg1_text), "effect": str(arg2_text),
                         "direction": "arg1->arg2", "method": "dependency_active",
                         "trigger_text": token.text, "confidence": confidence,
                         "has_uncertainty": has_uncertainty
@@ -225,7 +257,7 @@ def extract_dependency_relation(
                 else:
                     # arg2 is first (Cause), arg1 is second (Effect) -> relation is arg2 -> arg1
                     return {
-                        "is_causal": 1, "pred_directed": 0, "cause": arg2_text, "effect": arg1_text,
+                        "is_causal": 1, "pred_directed": 0, "cause": str(arg2_text), "effect": str(arg1_text),
                         "direction": "arg2->arg1", "method": "dependency_active",
                         "trigger_text": token.text, "confidence": confidence,
                         "has_uncertainty": has_uncertainty
@@ -262,10 +294,13 @@ def build_extracted_records(
     """Standardized batch transformation from candidate pairs to validated UnifiedRelationRecords."""
     records = []
     for _, r in df_cands.iterrows():
+        a1_text = "" if pd.isna(r["arg1_text"]) else str(r["arg1_text"])
+        a2_text = "" if pd.isna(r["arg2_text"]) else str(r["arg2_text"])
+        btw_text = "" if pd.isna(r["between_text"]) else str(r["between_text"])
         res = extractor_fn(
-            arg1_text=str(r["arg1_text"]),
-            arg2_text=str(r["arg2_text"]),
-            between_text=str(r["between_text"]),
+            arg1_text=a1_text,
+            arg2_text=a2_text,
+            between_text=btw_text,
             arg1_before_arg2=int(r["arg1_before_arg2"])
         )
         if res["pred_directed"] == 1:
@@ -274,17 +309,17 @@ def build_extracted_records(
                 "article_id": r["article_id"],
                 "section_id": r["section_id"],
                 "cause_id": r["arg1_id"],
-                "cause_text": r["arg1_text"],
+                "cause_text": a1_text,
                 "cause_start": r["arg1_start"],
                 "cause_end": r["arg1_end"],
                 "effect_id": r["arg2_id"],
-                "effect_text": r["arg2_text"],
+                "effect_text": a2_text,
                 "effect_start": r["arg2_start"],
                 "effect_end": r["arg2_end"],
                 "direction": "cause->effect",
                 "confidence": float(res.get("confidence", 0.90)),
                 "extraction_method": method_name,
-                "evidence_text": str(r["between_text"]),
+                "evidence_text": btw_text,
                 "provenance": str(res.get("trigger_text", res.get("method", method_name))),
                 "split": r["split"]
             })

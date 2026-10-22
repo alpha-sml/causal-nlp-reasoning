@@ -1,6 +1,6 @@
 # Target Runtime: Python 3.14 (tested on Python 3.14.2 macOS arm64)
 
-# Active pipeline dependencies (00_setup, 01_eda, AML_01, AML_02, AML_03, AML_04)
+# Active pipeline dependencies (00_setup, 01_eda, AML_01, AML_02, AML_03, AML_04, AML_05)
 pandas>=2.2.0
 numpy>=1.26.0
 datasets>=2.19.0
