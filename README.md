@@ -33,7 +33,8 @@ causal-nlp-reasoning/
 │   ├── AML_02_ner.ipynb                # Scientific entity & argument mention extraction, conservative canonicalization & spaCy baseline evaluation
 │   ├── AML_03_dependency_patterns.ipynb# Syntactic dependency parsing & lexical pattern causal extraction with directional correctness
 │   ├── AML_04_classical_classifier.ipynb# Supervised relation baseline, stable-ID NetworkX DAG construction & pgmpy Bayesian network reasoning
-│   └── AML_05_integration_evaluation.ipynb# [Planned] Neuro-symbolic causal pipeline & graph evaluation
+│   ├── AML_05_integration_evaluation.ipynb# End-to-end multi-pathway benchmark, unified schema, DAG evaluation & error analysis
+│   └── causal_extractors.py            # Shared direction-aware lexical and syntactic dependency relation extractors
 ├── DL/                                 # [Planned] Deep learning & transformer fine-tuning workflows
 │   ├── DL_01_data_pipeline.ipynb
 │   ├── DL_02_baseline_models.ipynb
@@ -155,6 +156,27 @@ causal-nlp-reasoning/
   - **Supplementary Corr2Cause Classifier:**
     - Evaluates classical classifier on Corr2Cause tabular features (**Accuracy = 55.34%**, **Macro-F1 = 50.51%**), clearly labeled as an isolated formal entailment benchmark.
 
+- **`AML/AML_05_integration_evaluation.ipynb`**:
+  - **End-to-End Pipeline Integration & Common Output Schema:**
+    - Establishes a canonical 17-column `UnifiedRelationRecord` schema (`relation_id`, `article_id`, `section_id`, `cause_id`, `cause_text`, `cause_start`, `cause_end`, `effect_id`, `effect_text`, `effect_start`, `effect_end`, `direction`, `confidence`, `extraction_method`, `evidence_text`, `provenance`, `split`).
+  - **Master Multi-Pathway Benchmark (Held-Out Test Split — 100 Gold Relations):**
+    - **Pathway 1 (Rule & Dependency on Gold Argument Spans — Shared `causal_extractors.py`):**
+      - Lexical Rule Baseline: Precision = **40.74%**, Recall = **33.00%**, F1 = **36.46%** (81 predictions, 33 TP, 48 FP, 67 FN).
+      - spaCy Dependency Extractor: Precision = **34.72%**, Recall = **25.00%**, F1 = **29.07%** (72 predictions, 25 TP, 47 FP, 75 FN).
+      - Hybrid Extractor: Precision = **37.93%**, Recall = **44.00%**, F1 = **40.74%** (116 predictions, 44 TP, 72 FP, 56 FN).
+    - **Pathway 2 (Supervised Classical Classifier on Gold Argument Spans):**
+      - Validation-selected `Logistic Regression (Unweighted)`: Precision = **68.00%**, Recall = **34.00%**, F1 = **45.33%** (50 predictions, 34 TP, 16 FP, 66 FN).
+    - **Pathway 3 (Genuinely End-to-End Extraction from Raw Text via Predicted Mentions):**
+      - Full unassisted cascade from raw text (spaCy NER $\to$ candidate pairing $\to$ LR classification).
+      - Evaluated on test articles using exact span boundaries and relaxed overlap ($\text{IoU} \ge 0.5$).
+      - Yields Precision = **0.00%**, Recall = **0.00%**, F1 = **0.00%** (44 candidate relations predicted, 0 true positive overlap with situation spans).
+      - **Critical Methodological Finding:** Empirically demonstrates the error propagation bottleneck of off-the-shelf general NER (`en_core_web_sm`) on complex biomedical situation descriptions, providing clear justification for domain-specific fine-tuning (e.g. BioBERT / PubMedBERT in `DL/`).
+  - **Directed Graph (DAG) Compilation:**
+    - Single-article case study (`PMC2714965`): Edge Precision = **100.00% (6/6)**, Recall = **27.27% (6/22)**, Edge F1 = **42.86%**, Acyclic = True.
+    - Corpus-wide test partition (all 4 test articles): Edge Precision = **68.00% (34/50)**, Recall = **34.00% (34/100)**, Edge F1 = **45.33%**, Acyclic = True.
+  - **Probabilistic Bayesian Network Reasoning:**
+    - Transparently models the neuro-symbolic bridge: text mining extracts qualitative graph topology, while numerical inference demonstrates Pearl's $do$-calculus ($P=0.8500$) vs. observational conditioning ($P=0.6500$) on explicit synthetic CPDs.
+
 ---
 
 ## Dataset Partition Summary
@@ -193,7 +215,7 @@ pip install -r requirements-dl.txt
 
 ### Dependency Roles
 
-- **`requirements.txt`**: Active dependencies for `00_setup.ipynb`, `01_eda.ipynb`, and `AML/AML_01` through `AML_04` (`pandas`, `numpy`, `datasets`, `networkx`, `matplotlib`, `seaborn`, `scipy`, `scikit-learn`, `ipykernel`, `spacy`, `pgmpy`, `nbclient`, `nbformat`).
+- **`requirements.txt`**: Active dependencies for `00_setup.ipynb`, `01_eda.ipynb`, and `AML/AML_01` through `AML_05` (`pandas`, `numpy`, `datasets`, `networkx`, `matplotlib`, `seaborn`, `scipy`, `scikit-learn`, `ipykernel`, `spacy`, `pgmpy`, `nbclient`, `nbformat`).
 - **`requirements-dl.txt`**: Optional dependencies for deep learning workflows in `DL/` (`torch`, `transformers`, `accelerate`).
 
 ---
@@ -229,6 +251,7 @@ The AML pipeline must be executed sequentially from fresh kernels:
 4. **`AML/AML_02_ner.ipynb`**: Validates entity offsets, tests conservative canonicalization, and benchmarks spaCy NER under Span-Only, Typed, and Maximum Relaxed Matching.
 5. **`AML/AML_03_dependency_patterns.ipynb`**: Evaluates rule-based and dependency extraction patterns on held-out BioCause splits with strict directional correctness and negation controls.
 6. **`AML/AML_04_classical_classifier.ipynb`**: Trains classical classifiers on candidate pairs, compiles stable-ID NetworkX DAGs, runs graph integrity audits, and executes observational and interventional queries in `pgmpy`.
+7. **`AML/AML_05_integration_evaluation.ipynb`**: Integrates the end-to-end pipeline, evaluates multi-pathway extraction benchmarks (Gold-conditioned vs. Raw End-to-End), audits test DAGs, and formalizes the neuro-symbolic Bayesian network bridge.
 
 ---
 
