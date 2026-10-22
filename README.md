@@ -16,7 +16,7 @@ flowchart LR
     end
 
     subgraph Extract["2. Causal Extraction Engine"]
-        E1["Phase 1: Classical AML<br/>• NER & Alias Normalization<br/>• Lexical & Dependency (SDP)<br/>• 6-Model Supervised Zoo"]
+        E1["Phase 1: Classical AML<br/>• NER & Alias Normalization<br/>• Lexical & Dependency (SDP)<br/>• 7-Model Supervised Zoo"]
         E2["Phase 2: Deep Learning<br/>• Compact Transformer Fine-Tuning<br/>• End-to-End Span & Relation Extraction"]
     end
 
@@ -52,11 +52,12 @@ Natural language extractors can propose conflicting or cyclic edges. Our graph c
 | :--- | :--- | :--- | :--- |
 | **Data & Split Hygiene** | 12 Train / 4 Val / 4 Test PMC Articles | **100% Offset Validity**, **0 Cross-Article Leaks** | [`00_setup.ipynb`](00_setup.ipynb), [`01_eda.ipynb`](01_eda.ipynb) |
 | **Rule & Dependency Extraction** | Hybrid Lexical + spaCy Dependency + SDP | **40.74% F1** (37.93% P, **44.00% R**) | [`AML/AML_03_dependency_patterns.ipynb`](AML/AML_03_dependency_patterns.ipynb) |
-| **Supervised Relation Classifier** | `Logistic Regression (Unweighted)` | **45.33% F1** (**68.00% P**, 34.00% R, **94.18% Acc**) | [`AML/AML_04_classical_classifier.ipynb`](AML/AML_04_classical_classifier.ipynb) |
+| **Supervised Classifier (F1-Optimal)** | `Logistic Regression (Moderate Weight 1:2)` | **55.32% F1** (59.09% P, **52.00% R**, **0.7606 Macro-F1**) | [`AML/AML_04_classical_classifier.ipynb`](AML/AML_04_classical_classifier.ipynb) |
+| **Supervised Classifier (High-Precision DAG)** | `Logistic Regression (Unweighted)` | **45.33% F1** (**68.00% P**, 34.00% R, **94.18% Acc**) | [`AML/AML_04_classical_classifier.ipynb`](AML/AML_04_classical_classifier.ipynb) |
 | **DAG Edge Evaluation** | Stable-ID NetworkX Graph (`PMC2714965` / Corpus) | **100.00% Case Study Edge P** / **68.00% Corpus Edge P** | [`AML/AML_04_classical_classifier.ipynb`](AML/AML_04_classical_classifier.ipynb) |
 | **Bayesian Network Reasoning** | `pgmpy` `DiscreteBayesianNetwork` + `do()` | $P(\text{Res}\mid \text{PmrB}{=}1){=}\mathbf{0.66}$ vs. $P(\text{Res}\mid do(\text{PmrA}{=}1)){=}\mathbf{0.85}$ | [`AML/AML_05_integration_evaluation.ipynb`](AML/AML_05_integration_evaluation.ipynb) |
 
-> **Dive Deeper into Phase 1**: See [**`AML/README.md`**](AML/README.md) for the full literature review table, 6-model validation comparisons, `GroupKFold` tuning curves, 95% bootstrap confidence intervals, learned feature importances, and notebook-by-notebook breakdowns.
+> **Dive Deeper into Phase 1**: See [**`AML/README.md`**](AML/README.md) for the full literature review table, 7-model validation comparisons, `GroupKFold` tuning curves, 95% bootstrap confidence intervals, learned feature importances, and notebook-by-notebook breakdowns.
 
 ---
 
@@ -74,7 +75,7 @@ causal-nlp-reasoning/
 │   ├── AML_01_data_features.ipynb      # Standoff parser, 12/4/4 group split & candidate generation
 │   ├── AML_02_ner.ipynb                # Alias normalization & 3-regime spaCy NER evaluation
 │   ├── AML_03_dependency_patterns.ipynb# Directional rules, dependency trees & SDP verification
-│   ├── AML_04_classical_classifier.ipynb# 6-model zoo, GroupKFold, PR curves, DAGs & pgmpy do-calculus
+│   ├── AML_04_classical_classifier.ipynb# 7-model zoo, GroupKFold, PR curves, DAGs & pgmpy do-calculus
 │   └── AML_05_integration_evaluation.ipynb# End-to-end 3-pathway benchmark & acceptance gate
 ├── DL/                                 # Phase 2: Deep Learning & Transformer Pipeline
 │   └── DL_01 .. DL_05.ipynb            # Transformer fine-tuning & neuro-symbolic integration

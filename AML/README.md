@@ -21,7 +21,7 @@ flowchart TD
 
     subgraph S2["2. Relation Extraction Pathways"]
         B1 --> C1["AML_03_dependency_patterns.ipynb<br/>Lexical, spaCy Dependency & Hybrid Rules<br/>Shortest Dependency Path (SDP) Verification"]
-        B1 --> C2["AML_04_classical_classifier.ipynb<br/>6-Model Classical Zoo + GroupKFold Tuning<br/>TF-IDF + 10 Positional/Trigger Features"]
+        B1 --> C2["AML_04_classical_classifier.ipynb<br/>7-Model Classical Zoo + GroupKFold Tuning<br/>TF-IDF + 10 Positional/Trigger Features"]
         B2 --> C3["AML_05_integration_evaluation.ipynb<br/>Pathway 3: Unassisted Raw-Text Cascade<br/>(spaCy NER -> Pairing -> LR Classifier)"]
     end
 
@@ -112,20 +112,24 @@ In [`../01_eda.ipynb`](../01_eda.ipynb), exploratory diagnostics reveal two crit
 
 ### 4.4 `AML_04_classical_classifier.ipynb` — Supervised Model Zoo, Tuning & Causal Bayesian Networks
 
-#### A. Six-Model Classical Validation Comparison
-Features (`StandardScaler` over 10 positional/length/trigger features + 100-feature 1–2 gram `TfidfVectorizer`) are fitted **strictly on `X_train` (`10,086` rows)** and evaluated across 6 classical model families on the validation split (`1,914` rows):
+#### A. Seven-Model Classical Validation Comparison (Dual Operating Points)
+Features (`StandardScaler` over 10 positional/length/trigger features + 100-feature 1–2 gram `TfidfVectorizer`) are fitted **strictly on `X_train` (`10,086` rows)** and evaluated across 7 classical model configurations on the validation split (`1,914` rows):
 
 | Model Family | Val Accuracy | Val Macro-F1 | Causal Precision (1) | Causal Recall (1) | Causal F1 (1) | Val PR-AUC | Non-Causal F1 (0) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Logistic Regression (Unweighted)** ⭐ | **0.9514** | **0.7412** | **0.8276** | 0.3664 | **0.5079** | 0.5820 | **0.9744** |
+| **Logistic Regression (Moderate Weight 1:2)** 🏆 *(F1-Optimal)* | 0.9436 | **0.7788** | 0.5878 | 0.5878 | **0.5878** | 0.5742 | 0.9698 |
+| **Logistic Regression (Unweighted)** ⭐ *(High-Precision DAG)* | **0.9514** | 0.7412 | **0.8276** | 0.3664 | 0.5079 | 0.5820 | **0.9744** |
 | **Gradient Boosting (`HistGBT`)** | 0.9509 | 0.7397 | 0.8136 | 0.3664 | 0.5053 | **0.7011** | 0.9742 |
 | **Random Forest (Balanced Subsample)** | 0.8386 | 0.6643 | 0.2797 | 0.8626 | 0.4224 | 0.6781 | 0.9062 |
-| **Logistic Regression (Balanced)** | 0.7795 | 0.6118 | 0.2229 | 0.8931 | 0.3567 | 0.5126 | 0.8670 |
+| **Logistic Regression (Balanced 1:15.2)** | 0.7795 | 0.6118 | 0.2229 | 0.8931 | 0.3567 | 0.5126 | 0.8670 |
 | **LinearSVC (Balanced)** | 0.7732 | 0.6074 | 0.2189 | **0.9008** | 0.3522 | 0.4743 | 0.8626 |
 | **Dummy (Majority)** | 0.9316 | 0.4823 | 0.0000 | 0.0000 | 0.0000 | 0.0684 | 0.9646 |
 
-- **Why Unweighted Logistic Regression Wins for Graph Construction**: Class-balanced models inflate false positives (`Precision ~22–28%`), injecting dozens of spurious edges into downstream DAGs. `Logistic Regression (Unweighted)` achieves the highest **Validation Macro-F1 (`0.7412`)**, **Causal F1 (`0.5079`)**, and **Precision (`82.76%`)**.
-- **Group-Aware Regularization Tuning (`GroupKFold` by `article_id`)**: 4-fold cross-validation across the 12 training articles confirms $C=1.0$ achieves optimal validation Macro-F1 (`0.7412`) without overfitting article-specific vocabulary.
+- **Dual-Operating-Point Design (F1 Maximization vs. High-Precision DAG Construction)**:
+  - **Why Full Inverse Balancing (`1:15.2`) Hurts F1**: Multiplying positive gradients by $15.2\times$ floods predictions with false positives (`Precision ~22%`, `Causal F1 = 35.67%`).
+  - **F1-Optimal Regime (`Moderate Weight 1:2`)**: Controlled $1:2$ positive weighting hits the precision-recall sweet spot (`58.78%` Val Precision, `58.78%` Val Recall, **`0.5878` Val Causal F1**, **`0.7788` Val Macro-F1**), achieving **`55.32%` Causal F1** (`59.09%` P, `52.00%` R, **`0.7606` Macro-F1**) on the held-out Test split.
+  - **High-Precision DAG Regime (`Unweighted 1:1`)**: Selected as the primary feeder for downstream NetworkX DAG & `pgmpy` Bayesian network construction because its **`82.76%` Validation Precision** (`68.00%` Test Precision, `100.00%` Case-Study Edge Precision) prevents false-positive edges from compounding across multi-hop $do$-calculus inference.
+- **Group-Aware Regularization Tuning (`GroupKFold` by `article_id`)**: 4-fold cross-validation across the 12 training articles confirms $C=1.0$ achieves optimal validation generalization without overfitting article-specific vocabulary.
 
 ![Validation PR Curves and Threshold Tuning](assets/aml04_pr_threshold_curves.png)
 
@@ -185,8 +189,9 @@ Integrates all extraction methodologies under a strict 17-column `UnifiedRelatio
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Pathway 1: Lexical Rule Baseline** | Gold Argument Spans | 81 | 33 | 48 | 67 | 40.74% | 33.00% | **36.46%** |
 | **Pathway 1: spaCy Dependency Extractor** | Gold Argument Spans | 72 | 25 | 47 | 75 | 34.72% | 25.00% | **29.07%** |
-| **Pathway 1: Hybrid Extractor (Rules + Dep)** | Gold Argument Spans | 116 | 44 | 72 | 56 | 37.93% | **44.00%** | **40.74%** |
-| **Pathway 2: Logistic Regression (Unweighted)** ⭐ | Gold Argument Spans | 50 | 34 | 16 | 66 | **68.00%** | 34.00% | **45.33%** |
+| **Pathway 1: Hybrid Extractor (Rules + Dep)** | Gold Argument Spans | 116 | 44 | 72 | 56 | 37.93% | 44.00% | **40.74%** |
+| **Pathway 2: Logistic Regression (Unweighted — High-Precision DAG)** ⭐ | Gold Argument Spans | 50 | 34 | 16 | 66 | **68.00%** | 34.00% | **45.33%** |
+| **Pathway 2: Logistic Regression (Weight 1:2 — F1-Optimal)** 🏆 | Gold Argument Spans | 88 | 52 | 36 | 48 | 59.09% | **52.00%** | **55.32%** |
 | **Pathway 3: End-to-End Cascade ($\text{IoU}\ge 0.5$)** | Raw Text (`en_core_web_sm`) | 44 | 0 | 44 | 100 | 0.00% | 0.00% | **0.00%** |
 
 ![Master Multi-Pathway Comparison](assets/aml05_pathway_comparison.png)

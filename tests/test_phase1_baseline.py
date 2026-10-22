@@ -487,7 +487,7 @@ class TestPhase1BenchmarkReconciliation(unittest.TestCase):
         self.assertEqual(gold_pos, 100)
         self.assertEqual(gold_neg, 1308)
 
-        # Verified evaluation confusion matrix from AML_04 Logistic Regression (Unweighted)
+        # Verified evaluation confusion matrix from AML_04 Logistic Regression (Unweighted - High-Precision DAG Regime)
         tn, fp, fn, tp = 1292, 16, 66, 34
         self.assertEqual(tn + fp + fn + tp, 1408, "Total evaluated != 1,408")
         self.assertEqual(tn + fp, gold_neg, "TN + FP != Gold Negative")
@@ -503,6 +503,20 @@ class TestPhase1BenchmarkReconciliation(unittest.TestCase):
         self.assertEqual(recall, 34.00)
         self.assertEqual(f1, 45.33)
         self.assertEqual(accuracy, 94.18)
+
+        # Verified evaluation confusion matrix from AML_04 Logistic Regression (Moderate Weight 1:2 - F1-Optimal Regime)
+        tn_m, fp_m, fn_m, tp_m = 1272, 36, 48, 52
+        self.assertEqual(tn_m + fp_m + fn_m + tp_m, 1408, "Total evaluated != 1,408")
+        self.assertEqual(tn_m + fp_m, gold_neg, "TN + FP != Gold Negative")
+        self.assertEqual(fn_m + tp_m, gold_pos, "FN + TP != Gold Positive")
+        self.assertEqual(tp_m + fp_m, 88, "Predicted positives != 88")
+
+        p_m = round(tp_m / (tp_m + fp_m) * 100, 2)
+        r_m = round(tp_m / (tp_m + fn_m) * 100, 2)
+        f1_m = round(2 * p_m * r_m / (p_m + r_m), 2)
+        self.assertEqual(p_m, 59.09)
+        self.assertEqual(r_m, 52.00)
+        self.assertEqual(f1_m, 55.32)
 
 
 # ===========================================================================
