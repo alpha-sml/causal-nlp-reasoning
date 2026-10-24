@@ -232,7 +232,7 @@ def compute_shortest_dependency_path(
         "sdp_tokens": [],
         "sdp_lemmas": [],
         "sdp_dep_labels": [],
-        "sdp_has_causal_lemma": any(t.lemma_.lower() in CAUSAL_LEMMAS for t in doc)
+        "sdp_has_causal_lemma": False
     }
 
 

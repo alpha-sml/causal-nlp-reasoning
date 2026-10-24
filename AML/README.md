@@ -49,7 +49,7 @@ flowchart TD
 ## 3. Dataset Architecture & Exploratory Diagnostics (`00_setup` & `01_eda`)
 
 ### 3.1 Primary Corpus: BioCause (Article-Isolated Partitioning)
-To prevent document-level vocabulary and domain leakage, all 198 paired `.txt`/`.ann` section files are partitioned strictly by source publication (`article_id`, seed 42):
+To prevent document-level vocabulary and domain leakage, all 198 paired `.txt`/`.ann` section files across the 20 unique PMC article IDs in the NaCTeM corpus release (185 of which contain $\ge 2$ argument spans to form candidate pairs) are partitioned strictly by source publication (`article_id`, seed 42):
 
 | Dataset Partition | PMC Articles | Section Files (Raw) | Sections with Candidates | Gold Relations | Candidate Pairs ($\le 2000$ chars) | Causal Prevalence (%) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -60,7 +60,7 @@ To prevent document-level vocabulary and domain leakage, all 198 paired `.txt`/`
 
 ### 3.2 Supplementary Benchmark: Corr2Cause Class Imbalance & Shortcut Audit
 In [`../01_eda.ipynb`](../01_eda.ipynb), exploratory diagnostics reveal two critical properties of the Corr2Cause benchmark:
-1. **Severe Class Imbalance**: Refuted (`0`) examples account for **81.51%** of Train, **87.08%** of Validation, and **84.77%** of Test splits.
+1. **Severe Class Imbalance**: Refuted (`0`) examples account for **81.51%** of Train, **87.08%** of Validation, and **84.51%** of Test splits.
 2. **Template Shortcut Hazard**: The `child` hypothesis template has a **0.00% positive rate** (100% negative prior) across all splits, demonstrating why superficial accuracy without per-class F1 is misleading.
 
 ![Corr2Cause Label Distribution](assets/eda_label_imbalance.png)
@@ -106,6 +106,14 @@ In [`../01_eda.ipynb`](../01_eda.ipynb), exploratory diagnostics reveal two crit
 | **Prepositional Result** | `PmrB mutation` | `bacterial lysis` | `3` | `lysis -> results -> from -> PmrB` | `compound -> ROOT -> prep -> pobj` | `True` |
 | **Non-Causal Control** | `GeneA` | `GeneB` | `3` | `GeneA -> measured -> alongside -> GeneB` | `nsubjpass -> ROOT -> prep -> pobj` | `False` |
 
+- **Validation Candidate SDP Profile by Ground-Truth Label**:
+Gold causal relations are **2.49x more likely to be connected within the same sentence dependency tree** (75.57% vs. 30.34%), exhibit **shorter dependency distances** (3.95 vs. 4.93 hops), and are **2.90x more likely to contain an explicit causal predicate verb directly on the path** (15.27% vs. 5.27%):
+
+| Candidate Label | Candidate Count | Same-Sentence Connected Rate | Mean Connected SDP Hops | Median Connected SDP Hops | SDP Causal Verb Rate |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Non-Causal (0)** | 1,783 | 30.34% | 4.9316 | 4.0 | 5.27% |
+| **Gold Causal (1)** | 131 | **75.57%** | **3.9495** | **3.0** | **15.27%** |
+
 ![Rule and Dependency F1 Comparison](assets/aml03_rule_dependency_f1.png)
 
 ---
@@ -117,7 +125,7 @@ Features (`StandardScaler` over 10 positional/length/trigger features + 100-feat
 
 | Model Family | Val Accuracy | Val Macro-F1 | Causal Precision (1) | Causal Recall (1) | Causal F1 (1) | Val PR-AUC | Non-Causal F1 (0) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Logistic Regression (Moderate Weight 1:2)** 🏆 *(F1-Optimal)* | 0.9436 | **0.7788** | 0.5878 | 0.5878 | **0.5878** | 0.5742 | 0.9698 |
+| **Logistic Regression (Moderate Weight 1:2)** 🏆 *(F1-Optimal)* | 0.9436 | **0.7788** | 0.5878 | 0.5878 | **0.5878** | 0.5583 | 0.9697 |
 | **Logistic Regression (Unweighted)** ⭐ *(High-Precision DAG)* | **0.9514** | 0.7412 | **0.8276** | 0.3664 | 0.5079 | 0.5820 | **0.9744** |
 | **Gradient Boosting (`HistGBT`)** | 0.9509 | 0.7397 | 0.8136 | 0.3664 | 0.5053 | **0.7011** | 0.9742 |
 | **Random Forest (Balanced Subsample)** | 0.8386 | 0.6643 | 0.2797 | 0.8626 | 0.4224 | 0.6781 | 0.9062 |
@@ -129,7 +137,7 @@ Features (`StandardScaler` over 10 positional/length/trigger features + 100-feat
   - **Why Full Inverse Balancing (`1:15.2`) Hurts F1**: Multiplying positive gradients by $15.2\times$ floods predictions with false positives (`Precision ~22%`, `Causal F1 = 35.67%`).
   - **F1-Optimal Regime (`Moderate Weight 1:2`)**: Controlled $1:2$ positive weighting hits the precision-recall sweet spot (`58.78%` Val Precision, `58.78%` Val Recall, **`0.5878` Val Causal F1**, **`0.7788` Val Macro-F1**), achieving **`55.32%` Causal F1** (`59.09%` P, `52.00%` R, **`0.7606` Macro-F1**) on the held-out Test split.
   - **High-Precision DAG Regime (`Unweighted 1:1`)**: Selected as the primary feeder for downstream NetworkX DAG & `pgmpy` Bayesian network construction because its **`82.76%` Validation Precision** (`68.00%` Test Precision, `100.00%` Case-Study Edge Precision) prevents false-positive edges from compounding across multi-hop $do$-calculus inference.
-- **Group-Aware Regularization Tuning (`GroupKFold` by `article_id`)**: 4-fold cross-validation across the 12 training articles confirms $C=1.0$ achieves optimal validation generalization without overfitting article-specific vocabulary.
+- **Group-Aware Regularization Tuning (`GroupKFold` by `article_id`)**: 4-fold cross-validation across the 12 training articles shows validation Macro-F1 plateaus at $C=1.0$ (`0.7412` vs. `0.7444` at $C=10.0$; $\Delta = 0.0032 < \sigma_{\text{CV}} = 0.0126$). Under the one-standard-error parsimony rule, $C=1.0$ is retained to prevent overfitting article-specific vocabulary.
 
 ![Validation PR Curves and Threshold Tuning](assets/aml04_pr_threshold_curves.png)
 
