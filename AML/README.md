@@ -183,9 +183,9 @@ flowchart LR
     end
 ```
 
-- **Baseline Marginal**: $P(\text{Polymyxin\_Resistance} = 1) = \mathbf{0.3590}$
-- **Observational Conditioning**: $P(\text{Polymyxin\_Resistance} = 1 \mid \text{PmrB} = 1) = \mathbf{0.6600}$ (`+0.3010` associative shift)
-- **Interventional Query (`model.do(['PmrA'])`)**: $P(\text{Polymyxin\_Resistance} = 1 \mid do(\text{PmrA} = 1)) = \mathbf{0.8500}$ (pure causal effect via mutilated graph surgery)
+- **Baseline Marginal**: $P(\text{Polymyxin}_{\text{Resistance}} = 1) = \mathbf{0.3590}$
+- **Observational Conditioning**: $P(\text{Polymyxin}_{\text{Resistance}} = 1 \mid \text{PmrB} = 1) = \mathbf{0.6600}$ (`+0.3010` associative shift)
+- **Interventional Query (`model.do(['PmrA'])`)**: $P(\text{Polymyxin}_{\text{Resistance}} = 1 \mid \operatorname{do}(\text{PmrA} = 1)) = \mathbf{0.8500}$ (pure causal effect via mutilated graph surgery)
 
 ---
 
