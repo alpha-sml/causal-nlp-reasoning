@@ -15,9 +15,11 @@ flowchart LR
         T2["Corr2Cause Benchmark<br/>207,972 Premise-Hypothesis<br/>Entailment Pairs"]
     end
 
-    subgraph Extract["2. Causal Extraction Engine"]
-        E1["Phase 1: Classical AML<br/>• NER & Alias Normalization<br/>• Lexical & Dependency (SDP)<br/>• 7-Model Supervised Zoo"]
-        E2["Phase 2: Deep Learning<br/>• Compact Transformer Fine-Tuning<br/>• End-to-End Span & Relation Extraction"]
+    subgraph Extract["2. Causal Extraction & Inference"]
+        E1["BioCause: Phase 1 AML<br/>• Dependency (SDP) & Rules<br/>• Supervised Classifiers"]
+        E2["BioCause: Phase 2 PubMedBERT<br/>• Domain-Pretrained Fulltext<br/>• Argument Boundary Markers"]
+        H1["BioCause: Hybrid Integration<br/>• Validation Probability Fusion<br/>• 17-Col Unified Relation Records"]
+        C2C["Corr2Cause: DistilBERT<br/>• Compact Sequence Classifier<br/>• Binary Entailment Head"]
     end
 
     subgraph Symbolic["3. Symbolic Causal Reasoning"]
@@ -25,9 +27,16 @@ flowchart LR
         G2["pgmpy Bayesian Network<br/>• Observational P(Y | X)<br/>• Interventional P(Y | do(X))"]
     end
 
-    T1 & T2 --> E1 & E2
-    E1 & E2 -->|"Reviewed Predictions<br/>(Unified 17-Col Schema)"| G1
+    subgraph Eval["4. Standalone Evaluation"]
+        EV1["Corr2Cause Benchmark<br/>• Acc, Macro-F1 by Var Count"]
+    end
+
+    T1 --> E1 & E2
+    E1 & E2 --> H1
+    H1 -->|"BioCause Hybrid Predictions<br/>(Unified 17-Col Schema)"| G1
     G1 -->|"Guaranteed Acyclic DAG"| G2
+    T2 --> C2C
+    C2C -->|"Independent Evaluation"| EV1
 ```
 
 ---
@@ -78,7 +87,13 @@ causal-nlp-reasoning/
 │   ├── AML_04_classical_classifier.ipynb# 7-model zoo, GroupKFold, PR curves, DAGs & pgmpy do-calculus
 │   └── AML_05_integration_evaluation.ipynb# End-to-end 3-pathway benchmark & acceptance gate
 ├── DL/                                 # Phase 2: Deep Learning & Transformer Pipeline
-│   └── DL_01 .. DL_05.ipynb            # Transformer fine-tuning & neuro-symbolic integration
+│   ├── README.md                       # Phase 2 architecture, contracts, execution & technical scope
+│   ├── dl_utils.py                     # Shared utilities, schemas, seed, device & evaluation helpers
+│   ├── DL_01_data_preparation.ipynb    # Data schemas, 12/4/4 split audit & entity boundary markers
+│   ├── DL_02_corr2cause_distilbert.ipynb # DistilBERT fine-tuning for NLI causal entailment
+│   ├── DL_03_biocause_pubmedbert.ipynb # PubMedBERT fine-tuning with argument markers & dynamic class weights
+│   ├── DL_04_hybrid_graph_integration.ipynb # Validation-tuned probability fusion & DAG/pgmpy reasoning
+│   └── DL_05_evaluation_ablation.ipynb # Comparative evaluation, ablation studies & final reporting
 ├── tests/
 │   └── test_phase1_baseline.py         # 16 automated unit, corpus, metric & notebook verification tests
 ├── requirements.txt                    # Phase 1 dependencies

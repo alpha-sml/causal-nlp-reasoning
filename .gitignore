@@ -21,3 +21,23 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+
+# Deep Learning checkpoints, model weights and caches
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+checkpoints/
+**/checkpoint-*/
+models/
+runs/
+wandb/
+.cache/
+hf_cache/
+
+# Credentials and secrets
+kaggle.json
+.kaggle/
+*.pem
+*.key
