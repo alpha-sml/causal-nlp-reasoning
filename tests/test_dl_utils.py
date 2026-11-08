@@ -5,27 +5,33 @@ Comprehensive Phase 2 DL utility validation suite verifying:
 2. Seed reproducibility across Python, NumPy, and PyTorch.
 3. Device detection with CPU fallback.
 4. Dataset schema validation for pandas DataFrames and HuggingFace Datasets.
-5. BioCause entity marker insertion: Arg1 before Arg2, Arg2 before Arg1, adjacent spans.
-6. Invalid and overlapping offset rejection.
-7. Context cropping while preserving entity markers.
-8. Dynamic class-weight calculation.
-9. Classification metrics computation.
-10. Probability fusion and invalid input rejection.
-11. CSV and Parquet export.
-12. Unified relation record schema compliance.
-13. Deterministic relation ID generation.
+5. BioCause candidate validation (isolation, duplicate IDs, binary labels).
+6. BioCause entity marker insertion: Arg1 before Arg2, Arg2 before Arg1, adjacent spans.
+7. Invalid, empty, and overlapping offset rejection.
+8. Context cropping while preserving entity markers and strictly respecting token budget.
+9. Dynamic class-weight calculation strictly from training split.
+10. Classification metrics computation, including ROC-AUC, PR-AUC, and degenerate distributions.
+11. Probability fusion and NaN/Inf/out-of-range rejection.
+12. CSV and Parquet export.
+13. Unified relation record schema compliance, deterministic IDs, offset and confidence validation.
+14. BioCause raw section loading and source context reconstruction.
+15. Tokenizer profiling helper.
+16. CUDA-only FP16 enforcement and TrainingArguments factory compatibility.
+17. Model embedding resizing helper.
+18. Pipeline constants verification.
 
 All tests use synthetic fixtures. No internet access, pretrained model downloads,
 or GPU hardware required.
 """
 
+from typing import Any
 import os
 import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import numpy as np
 import pandas as pd
@@ -135,7 +141,6 @@ class TestDeviceDetection(unittest.TestCase):
         try:
             import torch
         except ImportError:
-            # Without torch, should return CPU
             device = dl_utils.get_device()
             self.assertEqual(device, "cpu")
             return
@@ -154,16 +159,14 @@ class TestDeviceDetection(unittest.TestCase):
     def test_cpu_fallback_without_torch(self):
         """Simulate torch import failure."""
         with patch.dict(sys.modules, {"torch": None}):
-            # This will cause ImportError in get_device
-            # Since the module is already loaded, we mock at function level
-            pass  # Covered by the import guard in get_device
+            pass
 
 
 # ===========================================================================
-# 4. Dataset Schema Validation
+# 4. Dataset Schema Validation (DataFrame & HuggingFace Dataset)
 # ===========================================================================
 class TestDatasetValidation(unittest.TestCase):
-    """Verify dataset schema validation for various input types."""
+    """Verify dataset schema validation for pandas DataFrames and HF Datasets."""
 
     def test_valid_dataframe(self):
         df = pd.DataFrame({"col_a": [1, 2], "col_b": ["x", "y"]})
@@ -223,6 +226,100 @@ class TestDatasetValidation(unittest.TestCase):
             )
         self.assertIn("empty string values", str(ctx.exception).lower())
 
+    def test_dataframe_invalid_binary_label_raises(self):
+        df = pd.DataFrame({
+            "candidate_id": ["c1", "c2"],
+            "label": [1, 2],
+            "split": ["train", "train"],
+        })
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.validate_dataset_schema(df, ["candidate_id", "label", "split"])
+        self.assertIn("non-binary labels", str(ctx.exception).lower())
+
+    def test_dataframe_duplicate_candidate_id_raises(self):
+        df = pd.DataFrame({
+            "candidate_id": ["c1", "c1"],
+            "label": [1, 0],
+            "split": ["train", "train"],
+        })
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.validate_dataset_schema(df, ["candidate_id", "label", "split"])
+        self.assertIn("duplicate candidate_ids", str(ctx.exception).lower())
+
+    def test_real_huggingface_dataset_valid(self):
+        try:
+            from datasets import Dataset
+        except ImportError:
+            self.skipTest("datasets library not installed.")
+
+        ds = Dataset.from_dict({
+            "candidate_id": ["c1", "c2", "c3"],
+            "label": [1, 0, 1],
+            "split": ["train", "train", "test"],
+            "article_id": ["PMC1", "PMC1", "PMC2"],
+        })
+        self.assertTrue(dl_utils.validate_dataset_schema(ds, ["candidate_id", "label", "split", "article_id"]))
+
+    def test_real_huggingface_dataset_null_critical_field_raises(self):
+        try:
+            from datasets import Dataset
+        except ImportError:
+            self.skipTest("datasets library not installed.")
+
+        ds = Dataset.from_dict({
+            "candidate_id": ["c1", None, "c3"],
+            "label": [1, 0, 1],
+            "split": ["train", "train", "test"],
+        })
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.validate_dataset_schema(ds, ["candidate_id", "label", "split"])
+        self.assertIn("null values", str(ctx.exception).lower())
+
+    def test_real_huggingface_dataset_empty_text_raises(self):
+        try:
+            from datasets import Dataset
+        except ImportError:
+            self.skipTest("datasets library not installed.")
+
+        ds = Dataset.from_dict({
+            "candidate_id": ["c1", "   ", "c3"],
+            "label": [1, 0, 1],
+            "split": ["train", "train", "test"],
+        })
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.validate_dataset_schema(ds, ["candidate_id", "label", "split"])
+        self.assertIn("empty string values", str(ctx.exception).lower())
+
+    def test_real_huggingface_dataset_invalid_binary_label_raises(self):
+        try:
+            from datasets import Dataset
+        except ImportError:
+            self.skipTest("datasets library not installed.")
+
+        ds = Dataset.from_dict({
+            "candidate_id": ["c1", "c2"],
+            "label": [1, 3],
+            "split": ["train", "test"],
+        })
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.validate_dataset_schema(ds, ["candidate_id", "label", "split"])
+        self.assertIn("non-binary labels", str(ctx.exception).lower())
+
+    def test_real_huggingface_dataset_duplicate_candidate_id_raises(self):
+        try:
+            from datasets import Dataset
+        except ImportError:
+            self.skipTest("datasets library not installed.")
+
+        ds = Dataset.from_dict({
+            "candidate_id": ["dup_id", "dup_id"],
+            "label": [1, 0],
+            "split": ["train", "test"],
+        })
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.validate_dataset_schema(ds, ["candidate_id", "label", "split"])
+        self.assertIn("duplicate candidate_ids", str(ctx.exception).lower())
+
 
 # ===========================================================================
 # 5. BioCause Candidate Validation
@@ -251,7 +348,6 @@ class TestBioCauseCandidateValidation(unittest.TestCase):
 
     def test_missing_required_column_detected_early_no_keyerror(self):
         df = self._make_biocause_df().drop(columns=["label"])
-        # Should raise ValueError, NOT KeyError
         with self.assertRaises(ValueError) as ctx:
             dl_utils.validate_biocause_candidates(df)
         self.assertIn("missing required columns", str(ctx.exception).lower())
@@ -275,7 +371,6 @@ class TestBioCauseCandidateValidation(unittest.TestCase):
 
     def test_article_overlap_raises(self):
         df = self._make_biocause_df()
-        # Create overlap: PMC1 in both train and test
         df.loc[5, "article_id"] = "PMC1"
         with self.assertRaises(ValueError) as ctx:
             dl_utils.validate_biocause_candidates(df)
@@ -304,7 +399,6 @@ class TestEntityMarkerInsertion(unittest.TestCase):
 
     def test_arg1_before_arg2(self):
         sentence = "PmrB activates PmrA response."
-        # PmrB at [0:4], PmrA at [15:19]
         result = dl_utils.format_biocause_input_with_markers(
             sentence, arg1_start=0, arg1_end=4, arg2_start=15, arg2_end=19
         )
@@ -312,19 +406,15 @@ class TestEntityMarkerInsertion(unittest.TestCase):
         self.assertIn("[/E1]", result)
         self.assertIn("[E2]", result)
         self.assertIn("[/E2]", result)
-        # Arg1 (PmrB) should be between [E1] and [/E1]
         e1_open = result.index("[E1]")
         e1_close = result.index("[/E1]")
         self.assertIn("PmrB", result[e1_open:e1_close + 5])
-        # Arg2 (PmrA) should be between [E2] and [/E2]
         e2_open = result.index("[E2]")
         e2_close = result.index("[/E2]")
         self.assertIn("PmrA", result[e2_open:e2_close + 5])
 
     def test_arg2_before_arg1(self):
         sentence = "PmrA is activated by PmrB kinase."
-        # PmrA at [0:4], PmrB at [21:25]
-        # Here arg2 (effect) is PmrA at position 0, arg1 (cause) is PmrB at position 21
         result = dl_utils.format_biocause_input_with_markers(
             sentence, arg1_start=21, arg1_end=25, arg2_start=0, arg2_end=4
         )
@@ -332,14 +422,12 @@ class TestEntityMarkerInsertion(unittest.TestCase):
         self.assertIn("[/E1]", result)
         self.assertIn("[E2]", result)
         self.assertIn("[/E2]", result)
-        # E2 markers should appear before E1 markers in the text
         e1_open = result.index("[E1]")
         e2_open = result.index("[E2]")
         self.assertLess(e2_open, e1_open, "E2 (PmrA) should appear before E1 (PmrB) in text.")
 
     def test_adjacent_entity_spans(self):
         sentence = "ABCD"
-        # AB at [0:2], CD at [2:4] (adjacent, not overlapping)
         result = dl_utils.format_biocause_input_with_markers(
             sentence, arg1_start=0, arg1_end=2, arg2_start=2, arg2_end=4
         )
@@ -352,32 +440,27 @@ class TestEntityMarkerInsertion(unittest.TestCase):
 
     def test_original_text_preserved(self):
         sentence = "Growth in mild acid promotes PmrA."
-        # "Growth in mild acid" is [0:19], "PmrA" is [29:33]
         result = dl_utils.format_biocause_input_with_markers(
             sentence, arg1_start=0, arg1_end=19, arg2_start=29, arg2_end=33
         )
-        # Original entity text should be preserved
         self.assertIn("Growth in mild acid", result)
         self.assertIn("PmrA", result)
 
     def test_arg1_identity_preserved(self):
-        """Arg1 should always be wrapped in [E1] tags regardless of position."""
         sentence = "Effect is caused by Cause here."
-        # arg1 (Cause) at position 20:25, arg2 (Effect) at position 0:6
         result = dl_utils.format_biocause_input_with_markers(
             sentence, arg1_start=20, arg1_end=25, arg2_start=0, arg2_end=6
         )
-        # Even though Arg2 appears first in text, Arg1 must still be in [E1] tags
         e1_open = result.index("[E1]")
         e1_close = result.index("[/E1]")
         self.assertIn("Cause", result[e1_open:e1_close + 5])
 
 
 # ===========================================================================
-# 7. Invalid and Overlapping Offsets
+# 7. Invalid, Empty, and Overlapping Offsets
 # ===========================================================================
 class TestInvalidOffsets(unittest.TestCase):
-    """Verify rejection of invalid and overlapping character offsets."""
+    """Verify rejection of invalid, empty, and overlapping character offsets."""
 
     def test_negative_start_raises(self):
         with self.assertRaises(ValueError):
@@ -390,6 +473,13 @@ class TestInvalidOffsets(unittest.TestCase):
             dl_utils.format_biocause_input_with_markers(
                 "test sentence", arg1_start=5, arg1_end=2, arg2_start=7, arg2_end=13
             )
+
+    def test_empty_span_raises(self):
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.format_biocause_input_with_markers(
+                "test sentence", arg1_start=4, arg1_end=4, arg2_start=7, arg2_end=13
+            )
+        self.assertIn("non-empty", str(ctx.exception).lower())
 
     def test_end_exceeds_length_raises(self):
         with self.assertRaises(ValueError):
@@ -414,7 +504,7 @@ class TestInvalidOffsets(unittest.TestCase):
 # 8. Context Cropping
 # ===========================================================================
 class TestContextCropping(unittest.TestCase):
-    """Verify context cropping preserves entity markers and spans."""
+    """Verify context cropping preserves entity markers and spans within budget."""
 
     def test_short_text_unchanged(self):
         marked = "[E1] PmrB [/E1] activates [E2] PmrA [/E2]."
@@ -432,7 +522,6 @@ class TestContextCropping(unittest.TestCase):
         self.assertIn("[/E2]", result)
         self.assertIn("PmrB", result)
         self.assertIn("PmrA", result)
-        # Verify token count stays strictly within 384 (budget 382)
         import re
         tokens = re.findall(r"\w+|[^\w\s]", result)
         self.assertLessEqual(len(tokens), 382)
@@ -465,6 +554,30 @@ class TestContextCropping(unittest.TestCase):
         self.assertIn("cand_huge_001", str(ctx.exception))
         self.assertIn("exceed token budget", str(ctx.exception).lower())
 
+    def test_final_token_budget_regression_check_with_tokenizer_mock(self):
+        """Regression test: Mock tokenizer where trimmed text exceeds requested budget."""
+        marked = "prefix text [E1] GeneA [/E1] middle [E2] ProteinB [/E2] suffix text"
+        mock_tokenizer = Mock()
+
+        def mock_encode(text, add_special_tokens=False):
+            if text.strip() == "[E1] GeneA [/E1] [E2] ProteinB [/E2]":
+                return [1] * 10
+            if text.strip() == "...":
+                return [1] * 2
+            return [1] * 25
+
+        mock_tokenizer.encode.side_effect = mock_encode
+
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.crop_context_around_entities(
+                marked_text=marked,
+                max_tokens=20,
+                tokenizer=mock_tokenizer,
+                candidate_id="cand_budget_overflow",
+            )
+        self.assertIn("cand_budget_overflow", str(ctx.exception))
+        self.assertIn("exceeds the requested token budget", str(ctx.exception).lower())
+
     def test_backward_compatible_alias(self):
         marked = "[E1] Arg1 [/E1] causes [E2] Arg2 [/E2]"
         res1 = dl_utils.crop_context_around_entities(marked, max_tokens=384)
@@ -476,7 +589,7 @@ class TestContextCropping(unittest.TestCase):
 # 9. Dynamic Class-Weight Calculation
 # ===========================================================================
 class TestDynamicClassWeight(unittest.TestCase):
-    """Verify dynamic class-weight computation."""
+    """Verify dynamic class-weight computation strictly from training split."""
 
     def test_expected_biocause_weight(self):
         weight = dl_utils.calculate_dynamic_class_weight(n_negative=9465, n_positive=621)
@@ -510,11 +623,10 @@ class TestClassificationMetrics(unittest.TestCase):
     """Verify classification metrics computation with synthetic predictions."""
 
     def _make_eval_pred(self, logits, labels):
-        """Create a mock EvalPrediction namedtuple."""
         return (np.array(logits), np.array(labels))
 
     def test_perfect_predictions(self):
-        logits = [[0.1, 0.9], [0.9, 0.1], [0.1, 0.9], [0.9, 0.1]]
+        logits = [[-2.0, 2.0], [2.0, -2.0], [-2.0, 2.0], [2.0, -2.0]]
         labels = [1, 0, 1, 0]
         result = dl_utils.compute_classification_metrics(
             self._make_eval_pred(logits, labels), average="binary"
@@ -523,9 +635,11 @@ class TestClassificationMetrics(unittest.TestCase):
         self.assertAlmostEqual(result["f1"], 1.0)
         self.assertAlmostEqual(result["precision"], 1.0)
         self.assertAlmostEqual(result["recall"], 1.0)
+        self.assertAlmostEqual(result["roc_auc"], 1.0)
+        self.assertAlmostEqual(result["pr_auc"], 1.0)
 
     def test_all_wrong_predictions(self):
-        logits = [[0.9, 0.1], [0.1, 0.9], [0.9, 0.1], [0.1, 0.9]]
+        logits = [[2.0, -2.0], [-2.0, 2.0], [2.0, -2.0], [-2.0, 2.0]]
         labels = [1, 0, 1, 0]
         result = dl_utils.compute_classification_metrics(
             self._make_eval_pred(logits, labels), average="binary"
@@ -542,7 +656,6 @@ class TestClassificationMetrics(unittest.TestCase):
         self.assertIn("f1", result)
 
     def test_imbalanced_binary(self):
-        # Simulate imbalanced dataset: 8 negatives, 2 positives
         logits = [[0.9, 0.1]] * 8 + [[0.1, 0.9]] * 2
         labels = [0] * 8 + [1] * 2
         result = dl_utils.compute_classification_metrics(
@@ -557,6 +670,17 @@ class TestClassificationMetrics(unittest.TestCase):
             self._make_eval_pred(logits, labels), average="binary"
         )
         self.assertIn("confusion_matrix", result)
+
+    def test_degenerate_single_class_metrics(self):
+        """Single-class distribution: ROC-AUC and PR-AUC must be safely None."""
+        logits = [[0.2, 0.8], [0.1, 0.9], [0.3, 0.7]]
+        labels = [1, 1, 1]  # No negative class
+        result = dl_utils.compute_classification_metrics(
+            self._make_eval_pred(logits, labels), average="binary"
+        )
+        self.assertIsNone(result["roc_auc"])
+        self.assertIsNone(result["pr_auc"])
+        self.assertEqual(result["accuracy"], 1.0)
 
 
 # ===========================================================================
@@ -591,6 +715,20 @@ class TestProbabilityFusion(unittest.TestCase):
     def test_invalid_alpha_above_one(self):
         with self.assertRaises(ValueError):
             dl_utils.fuse_probabilities(np.array([0.5]), np.array([0.5]), alpha=1.1)
+
+    def test_invalid_alpha_nan(self):
+        with self.assertRaises(ValueError):
+            dl_utils.fuse_probabilities(np.array([0.5]), np.array([0.5]), alpha=float("nan"))
+
+    def test_nan_in_probabilities_raises(self):
+        with self.assertRaises(ValueError):
+            dl_utils.fuse_probabilities(np.array([0.5, np.nan]), np.array([0.5, 0.5]), alpha=0.5)
+        with self.assertRaises(ValueError):
+            dl_utils.fuse_probabilities(np.array([0.5, 0.5]), np.array([0.5, np.nan]), alpha=0.5)
+
+    def test_inf_in_probabilities_raises(self):
+        with self.assertRaises(ValueError):
+            dl_utils.fuse_probabilities(np.array([0.5, np.inf]), np.array([0.5, 0.5]), alpha=0.5)
 
     def test_mismatched_lengths(self):
         with self.assertRaises(ValueError):
@@ -660,9 +798,9 @@ class TestExportPredictions(unittest.TestCase):
 # 13. Unified Relation Record Schema
 # ===========================================================================
 class TestUnifiedRelationRecord(unittest.TestCase):
-    """Verify unified relation record builder produces correct schema."""
+    """Verify unified relation record builder produces correct schema and validates inputs."""
 
-    def test_schema_columns(self):
+    def test_schema_columns_and_exact_order(self):
         record = dl_utils.build_unified_relation_record(
             candidate_id="cand_001",
             article_id="PMC123",
@@ -680,12 +818,9 @@ class TestUnifiedRelationRecord(unittest.TestCase):
             evidence_text="PmrB activates PmrA",
             split="test",
         )
-        # Check all 17 schema columns present
-        for col in dl_utils.UNIFIED_RELATION_SCHEMA:
-            self.assertIn(col, record, f"Missing schema column: {col}")
+        self.assertEqual(list(record.keys()), dl_utils.UNIFIED_RELATION_SCHEMA)
 
     def test_deterministic_relation_id(self):
-        """Relation ID should be deterministic from candidate_id."""
         record1 = dl_utils.build_unified_relation_record(
             candidate_id="cand_001",
             article_id="PMC123",
@@ -770,46 +905,80 @@ class TestUnifiedRelationRecord(unittest.TestCase):
         ids = [dl_utils.generate_relation_id(f"candidate_{i}") for i in range(100)]
         self.assertEqual(len(set(ids)), 100)
 
-    def test_default_direction_and_provenance(self):
-        record = dl_utils.build_unified_relation_record(
-            candidate_id="cand_001",
-            article_id="PMC123",
-            section_id="s1",
-            cause_id="T1",
-            cause_text="A",
-            cause_start=0,
-            cause_end=1,
-            effect_id="T2",
-            effect_text="B",
-            effect_start=5,
-            effect_end=6,
-            confidence=0.5,
-            extraction_method="test",
-            evidence_text="A B",
-            split="test",
-        )
-        self.assertEqual(record["direction"], "cause->effect")
-        self.assertEqual(record["provenance"], "BioCause")
+    def test_invalid_offsets_raise_value_error(self):
+        base_args = {
+            "candidate_id": "c1",
+            "article_id": "a1",
+            "section_id": "s1",
+            "cause_id": "t1",
+            "cause_text": "x",
+            "effect_id": "t2",
+            "effect_text": "y",
+            "confidence": 0.5,
+            "extraction_method": "m",
+            "evidence_text": "e",
+            "split": "train",
+        }
+        with self.assertRaises(ValueError):
+            dl_utils.build_unified_relation_record(
+                cause_start=-1, cause_end=2, effect_start=5, effect_end=7, **base_args
+            )
+        with self.assertRaises(ValueError):
+            dl_utils.build_unified_relation_record(
+                cause_start=5, cause_end=2, effect_start=6, effect_end=8, **base_args
+            )
+        with self.assertRaises(ValueError):
+            dl_utils.build_unified_relation_record(
+                cause_start=0, cause_end=2, effect_start=-1, effect_end=8, **base_args
+            )
+        with self.assertRaises(ValueError):
+            dl_utils.build_unified_relation_record(
+                cause_start=0, cause_end=2, effect_start=10, effect_end=8, **base_args
+            )
 
-    def test_record_count_equals_schema_count(self):
-        record = dl_utils.build_unified_relation_record(
-            candidate_id="c",
-            article_id="a",
-            section_id="s",
-            cause_id="t1",
-            cause_text="x",
-            cause_start=0,
-            cause_end=1,
-            effect_id="t2",
-            effect_text="y",
-            effect_start=2,
-            effect_end=3,
-            confidence=0.5,
-            extraction_method="m",
-            evidence_text="e",
-            split="train",
-        )
-        self.assertEqual(len(record), len(dl_utils.UNIFIED_RELATION_SCHEMA))
+    def test_invalid_confidence_raises_value_error(self):
+        base_args = {
+            "candidate_id": "c1",
+            "article_id": "a1",
+            "section_id": "s1",
+            "cause_id": "t1",
+            "cause_text": "x",
+            "cause_start": 0,
+            "cause_end": 1,
+            "effect_id": "t2",
+            "effect_text": "y",
+            "effect_start": 2,
+            "effect_end": 3,
+            "extraction_method": "m",
+            "evidence_text": "e",
+            "split": "train",
+        }
+        with self.assertRaises(ValueError):
+            dl_utils.build_unified_relation_record(confidence=-0.1, **base_args)
+        with self.assertRaises(ValueError):
+            dl_utils.build_unified_relation_record(confidence=1.1, **base_args)
+        with self.assertRaises(ValueError):
+            dl_utils.build_unified_relation_record(confidence=float("nan"), **base_args)
+
+    def test_missing_required_string_field_raises(self):
+        base_args = {
+            "article_id": "a1",
+            "section_id": "s1",
+            "cause_id": "t1",
+            "cause_text": "x",
+            "cause_start": 0,
+            "cause_end": 1,
+            "effect_id": "t2",
+            "effect_text": "y",
+            "effect_start": 2,
+            "effect_end": 3,
+            "confidence": 0.5,
+            "extraction_method": "m",
+            "evidence_text": "e",
+            "split": "train",
+        }
+        with self.assertRaises(ValueError):
+            dl_utils.build_unified_relation_record(candidate_id="", **base_args)
 
 
 # ===========================================================================
@@ -853,7 +1022,6 @@ class TestBioCauseSectionLoadingAndReconstruction(unittest.TestCase):
         self.assertEqual(content1, "Cached text content.")
         self.assertIn("cache_sec", cache)
 
-        # Overwrite file to verify cache is returned
         sec_file.write_text("Modified text.", encoding="utf-8")
         content2 = dl_utils.load_biocause_section_text("cache_sec", self.temp_dir, cache=cache)
         self.assertEqual(content2, "Cached text content.")
@@ -946,7 +1114,79 @@ class TestBioCauseSectionLoadingAndReconstruction(unittest.TestCase):
 
 
 # ===========================================================================
-# 15. Tokenizer Profiling Helper
+# 15. CUDA-Only FP16 Enforcement and TrainingArguments Factory
+# ===========================================================================
+class TestTrainingArgumentsFactory(unittest.TestCase):
+    """Verify that get_training_arguments enforces CUDA-only FP16 and handles versions."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @patch("torch.cuda.is_available", return_value=True)
+    def test_cuda_available_enables_fp16_by_default(self, mock_cuda):
+        args = dl_utils.get_training_arguments(output_dir=self.temp_dir)
+        self.assertTrue(args.fp16)
+
+    @patch("torch.cuda.is_available", return_value=False)
+    def test_cuda_unavailable_disables_fp16(self, mock_cuda):
+        args = dl_utils.get_training_arguments(output_dir=self.temp_dir)
+        self.assertFalse(args.fp16)
+
+    @patch("torch.cuda.is_available", return_value=False)
+    @patch("torch.backends.mps.is_available", return_value=True)
+    def test_mps_available_without_cuda_disables_fp16(self, mock_mps, mock_cuda):
+        args = dl_utils.get_training_arguments(output_dir=self.temp_dir)
+        self.assertFalse(args.fp16)
+
+    @patch("torch.cuda.is_available", return_value=False)
+    def test_explicit_fp16_true_on_cpu_remains_disabled(self, mock_cuda):
+        """Explicit fp16=True must NOT enable fp16 when CUDA is unavailable."""
+        args = dl_utils.get_training_arguments(output_dir=self.temp_dir, fp16=True)
+        self.assertFalse(args.fp16)
+
+    @patch("torch.cuda.is_available", return_value=False)
+    @patch("torch.backends.mps.is_available", return_value=True)
+    def test_explicit_fp16_true_on_mps_remains_disabled(self, mock_mps, mock_cuda):
+        """Explicit fp16=True must NOT enable fp16 when on MPS without CUDA."""
+        args = dl_utils.get_training_arguments(output_dir=self.temp_dir, fp16=True)
+        self.assertFalse(args.fp16)
+
+    def test_training_arguments_defaults_and_compatibility(self):
+        args = dl_utils.get_training_arguments(output_dir=self.temp_dir)
+        self.assertEqual(args.num_train_epochs, 3)
+        self.assertEqual(args.per_device_train_batch_size, dl_utils.DEFAULT_BIOCAUSE_BATCH_SIZE)
+        self.assertEqual(args.gradient_accumulation_steps, dl_utils.DEFAULT_BIOCAUSE_GRAD_ACCUM)
+        self.assertEqual(args.metric_for_best_model, "eval_f1")
+        self.assertTrue(args.greater_is_better)
+        self.assertTrue(args.load_best_model_at_end)
+
+
+# ===========================================================================
+# 16. Model Embedding Resizing Helper
+# ===========================================================================
+class TestModelEmbeddingResizing(unittest.TestCase):
+    """Verify resizing model embeddings to match tokenizer vocabulary."""
+
+    def test_resize_model_embeddings_calls_resize(self):
+        mock_model = Mock()
+        mock_tokenizer = Mock()
+        mock_tokenizer.__len__ = Mock(return_value=30526)
+
+        dl_utils.resize_model_embeddings_for_tokenizer(mock_model, mock_tokenizer)
+        mock_model.resize_token_embeddings.assert_called_once_with(30526)
+
+    def test_resize_model_embeddings_fallback(self):
+        mock_model = Mock(spec=[])
+        mock_tokenizer = [1, 2, 3]
+        result = dl_utils.resize_model_embeddings_for_tokenizer(mock_model, mock_tokenizer)
+        self.assertEqual(result, mock_model)
+
+
+# ===========================================================================
+# 17. Tokenizer Profiling Helper
 # ===========================================================================
 class TestTokenizerProfiling(unittest.TestCase):
     """Verify sequence length profiling helper."""
@@ -977,7 +1217,7 @@ class TestTokenizerProfiling(unittest.TestCase):
 
 
 # ===========================================================================
-# 16. Constants Verification
+# 18. Constants Verification
 # ===========================================================================
 class TestConstants(unittest.TestCase):
     """Verify that module constants are defined correctly."""

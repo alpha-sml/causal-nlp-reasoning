@@ -252,6 +252,17 @@ Both transformer models (`distilbert-base-uncased` and `microsoft/BiomedNLP-Biom
    pip install -r requirements-dl.txt
    ```
 
+### Mixed Precision & Device Selection Policy
+`DL/dl_utils.py` enforces strict compute device detection and mixed-precision policies:
+- Device selection follows deterministic fallback order:
+  1. **NVIDIA CUDA** (`'cuda'`)
+  2. **Apple MPS** (`'mps'`)
+  3. **CPU** (`'cpu'`)
+- **CUDA-only FP16**: `get_training_arguments()` guarantees that `fp16` is enabled **strictly on CUDA devices**.
+  - CPU and Apple MPS run with FP16 **disabled** (`fp16=False`), even if an explicit `fp16=True` argument is passed, preventing runtime crashes on unsupported hardware.
+  - CUDA environments automatically enable FP16 when requested or by default.
+  - BF16 and other unsupported mixed-precision modes remain disabled without explicit validated implementations.
+
 ---
 
 ## 11. Dependencies & Clean Architecture Policy
@@ -321,7 +332,8 @@ In Task 1:
 1. `resolve_biocause_section_path` and `load_biocause_section_text` locate and load the complete source `.txt` file using `section_id` from `data/raw/biocause/BioCause_corpus/` (or fallback `data/raw/biocause/`).
 2. `reconstruct_biocause_context_with_markers` verifies that character offsets match `arg1_text` and `arg2_text` (allowing documented newline normalization `c.replace("\n", " ") == arg_text`).
 3. Explicit argument boundary markers `[E1]...[/E1]` and `[E2]...[/E2]` are inserted into the complete source context (never substituting `between_text`).
-4. `crop_context_around_entities` crops context around both entity spans to fit within `MAX_LENGTH = 384` tokens (including special tokens). If arguments are distant, an explicit gap separator (`" ... "`) is inserted. Both complete entity spans and all four markers are guaranteed intact. If spans cannot fit, a `ValueError` is raised recording the candidate ID.
+4. `crop_context_around_entities` crops context around both entity spans to fit within `MAX_LENGTH = 384` tokens (including special tokens). If arguments are distant, an explicit gap separator (`" ... "`) is inserted. Both complete entity spans and all four markers are guaranteed intact. If spans cannot fit or exceed the budget, a descriptive `ValueError` is raised recording the candidate ID.
+5. **Actionable Diagnostics for Invalid Candidates**: Across the 13,408 BioCause candidates, source standoff annotations contain 222 candidate pairs with anomalies (188 overlapping argument spans, 22 span-crop limits, and 12 out-of-bounds standoff offsets). In accordance with the Task 1 specification, these candidates are **never silently discarded**; they are logged with actionable diagnostics in `DL_01_data_preparation.ipynb` and formatted with boundary markers to preserve full split integrity (10,086 train, 1,914 val, 1,408 test) across all exported datasets.
 
 ### Expected Processed Outputs (from DL_01)
 

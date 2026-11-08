@@ -3,7 +3,7 @@
 # Do not re-install or overwrite PyTorch if a compatible GPU build is already present.
 
 torch>=2.2.0
-transformers>=4.41.2,<5.0.0
+transformers>=4.41.2
 datasets>=2.19.0
 accelerate>=0.30.0
 scikit-learn>=1.4.0
@@ -13,3 +13,5 @@ matplotlib>=3.8.0
 seaborn>=0.13.0
 tqdm>=4.66.0
 pyarrow>=14.0.0
+networkx>=3.0
+pgmpy>=0.1.25

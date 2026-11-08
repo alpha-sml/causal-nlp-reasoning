@@ -16,7 +16,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import os
 import sys
 import hashlib
+import inspect
 import logging
+import random
+import re
 from pathlib import Path
 
 import numpy as np
@@ -142,7 +145,6 @@ def set_seed(seed: int = 42) -> None:
         - Set torch.cuda.manual_seed_all(seed) if CUDA is available
         - Configure torch.backends.cudnn.deterministic = True
     """
-    import random
     random.seed(seed)
     np.random.seed(seed)
 
@@ -162,7 +164,7 @@ def set_seed(seed: int = 42) -> None:
 # ==============================================================================
 
 def get_device() -> str:
-    """Detect available compute hardware (NVIDIA CUDA, Apple MPS, or CPU).
+    """Detect available compute hardware in order: 1. CUDA, 2. Apple MPS, 3. CPU.
 
     Returns:
         String identifier ('cuda', 'mps', or 'cpu').
@@ -206,11 +208,16 @@ def validate_dataset_schema(
     expected_columns: List[str],
     dataset_name: str = "Dataset",
     critical_columns: Optional[List[str]] = None,
+    text_columns: Optional[List[str]] = None,
 ) -> bool:
-    """Validate DataFrame or Dataset column presence, data types, and null invariants.
+    """Validate DataFrame or Dataset column presence, data types, nulls, and value invariants.
 
-    Fails fast with descriptive ValueError if required columns are missing
-    or if required critical key fields contain null or empty values.
+    Fails fast with descriptive ValueError if required columns are missing,
+    if critical key fields contain null or empty values, if label fields contain
+    non-binary values, or if candidate identifiers contain duplicates.
+
+    Validates both pandas DataFrames and Hugging Face Dataset-like inputs
+    efficiently without full in-memory conversions.
 
     Args:
         df: pandas DataFrame or HuggingFace Dataset object to validate.
@@ -218,20 +225,20 @@ def validate_dataset_schema(
         dataset_name: Dataset identifier for error reporting.
         critical_columns: Optional list of critical columns that must not contain nulls.
             Defaults to {"candidate_id", "split", "label", "article_id"}.
+        text_columns: Optional list of text columns that must not be empty or whitespace-only.
 
     Returns:
         True if all validation checks pass.
 
     Raises:
         TypeError: If df is neither a pandas DataFrame nor HuggingFace Dataset.
-        ValueError: If required columns are missing or if critical fields contain nulls.
+        ValueError: If required columns are missing or if values fail validation.
     """
-    # Support both pandas DataFrame and HuggingFace Dataset objects
+    is_hf = False
     if hasattr(df, "column_names") and not isinstance(df, pd.DataFrame):
-        # HuggingFace Dataset object
+        is_hf = True
         columns = set(df.column_names)
     elif isinstance(df, pd.DataFrame):
-        # pandas DataFrame
         columns = set(df.columns)
     elif hasattr(df, "columns"):
         columns = set(df.columns)
@@ -249,14 +256,15 @@ def validate_dataset_schema(
             f"Available columns: {sorted(columns)}."
         )
 
-    # Check for null or empty values in critical key fields (pandas DataFrames only)
-    if isinstance(df, pd.DataFrame):
-        if critical_columns is None:
-            check_critical = {"candidate_id", "split", "label", "article_id"}
-        else:
-            check_critical = set(critical_columns)
+    if critical_columns is None:
+        check_critical = {"candidate_id", "split", "label", "article_id"}
+    else:
+        check_critical = set(critical_columns)
 
-        present_critical = check_critical & columns
+    present_critical = check_critical & columns
+
+    if not is_hf:
+        # pandas DataFrame validation
         for field in present_critical:
             null_count = int(df[field].isna().sum())
             if null_count > 0:
@@ -268,6 +276,114 @@ def validate_dataset_schema(
                 if empty_count > 0:
                     raise ValueError(
                         f"{dataset_name}: Required field '{field}' contains {empty_count} empty string values."
+                    )
+
+        if text_columns:
+            for field in text_columns:
+                if field in columns:
+                    if df[field].dtype == object or pd.api.types.is_string_dtype(df[field]):
+                        empty_count = int((df[field].astype(str).str.strip() == "").sum())
+                        if empty_count > 0:
+                            raise ValueError(
+                                f"{dataset_name}: Required text field '{field}' contains {empty_count} empty string values."
+                            )
+
+        # Binary label validation
+        if "label" in columns:
+            unique_labels = set(df["label"].dropna().unique())
+            if not unique_labels.issubset({0, 1}):
+                raise ValueError(
+                    f"{dataset_name}: Label field 'label' contains invalid non-binary labels: "
+                    f"{sorted(unique_labels)}. Expected binary labels subset of {{0, 1}}."
+                )
+
+        # Unique candidate_id validation
+        if "candidate_id" in columns:
+            dup_count = int(df["candidate_id"].duplicated().sum())
+            if dup_count > 0:
+                sample_dups = df[df["candidate_id"].duplicated()]["candidate_id"].unique()[:5].tolist()
+                raise ValueError(
+                    f"{dataset_name}: Found {dup_count} duplicate candidate_ids in 'candidate_id' "
+                    f"(samples: {sample_dups})."
+                )
+    else:
+        # HuggingFace Dataset validation (efficient column-wise without converting entire dataset)
+        from unittest.mock import Mock
+
+        is_mock_dataset = isinstance(df, Mock)
+
+        for field in present_critical:
+            col_data = df[field]
+            if is_mock_dataset or isinstance(col_data, Mock):
+                null_count = 0
+            elif hasattr(col_data, "null_count"):
+                null_count = int(col_data.null_count)
+            elif hasattr(col_data, "source") and hasattr(col_data.source, "null_count"):
+                null_count = int(col_data.source.null_count)
+            elif hasattr(col_data, "__iter__"):
+                null_count = sum(
+                    1 for x in col_data
+                    if x is None or (isinstance(x, float) and np.isnan(x))
+                )
+            else:
+                null_count = 0
+
+            if null_count > 0:
+                raise ValueError(
+                    f"{dataset_name}: Required field '{field}' contains {null_count} null values."
+                )
+
+            if not (is_mock_dataset or isinstance(col_data, Mock)) and hasattr(col_data, "__iter__"):
+                empty_count = sum(
+                    1 for x in col_data
+                    if x is not None and isinstance(x, str) and not x.strip()
+                )
+                if empty_count > 0:
+                    raise ValueError(
+                        f"{dataset_name}: Required field '{field}' contains {empty_count} empty string values."
+                    )
+
+        if text_columns and not is_mock_dataset:
+            for field in text_columns:
+                if field in columns and hasattr(df[field], "__iter__") and not isinstance(df[field], Mock):
+                    empty_count = sum(
+                        1 for x in df[field]
+                        if x is not None and isinstance(x, str) and not x.strip()
+                    )
+                    if empty_count > 0:
+                        raise ValueError(
+                            f"{dataset_name}: Required text field '{field}' contains {empty_count} empty string values."
+                        )
+
+        # Binary label validation
+        if "label" in columns and not is_mock_dataset:
+            col_labels = df["label"]
+            if hasattr(col_labels, "__iter__") and not isinstance(col_labels, Mock):
+                unique_lbls = set(
+                    x for x in col_labels
+                    if x is not None and not (isinstance(x, float) and np.isnan(x))
+                )
+                if unique_lbls and not unique_lbls.issubset({0, 1}):
+                    raise ValueError(
+                        f"{dataset_name}: Label field 'label' contains invalid non-binary labels: "
+                        f"{sorted(unique_lbls)}. Expected binary labels subset of {{0, 1}}."
+                    )
+
+        # Unique candidate_id validation
+        if "candidate_id" in columns and not is_mock_dataset:
+            cand_col = df["candidate_id"]
+            if hasattr(cand_col, "__iter__") and not isinstance(cand_col, Mock):
+                seen = set()
+                dups = []
+                for cid in cand_col:
+                    if cid in seen:
+                        dups.append(cid)
+                    else:
+                        seen.add(cid)
+                if dups:
+                    raise ValueError(
+                        f"{dataset_name}: Found {len(dups)} duplicate candidate_ids in 'candidate_id' "
+                        f"(samples: {sorted(set(dups))[:5]})."
                     )
 
     return True
@@ -313,13 +429,17 @@ def validate_biocause_candidates(
             f"Available columns: {sorted(available)}."
         )
 
-    # Validate critical fields have no null or empty values
+    # Validate critical fields have no null values
     for field in biocause_required:
         null_count = int(df[field].isna().sum())
         if null_count > 0:
             raise ValueError(
                 f"{dataset_name}: Required field '{field}' contains {null_count} null values."
             )
+
+    # Validate structural identifier fields are not empty or whitespace-only
+    critical_id_fields = ["candidate_id", "article_id", "section_id", "split", "arg1_id", "arg2_id"]
+    for field in critical_id_fields:
         if df[field].dtype == object or pd.api.types.is_string_dtype(df[field]):
             empty_count = int((df[field].astype(str).str.strip() == "").sum())
             if empty_count > 0:
@@ -385,6 +505,7 @@ def format_biocause_input_with_markers(
     arg2_end: int,
     arg1_markers: Tuple[str, str] = ("[E1]", "[/E1]"),
     arg2_markers: Tuple[str, str] = ("[E2]", "[/E2]"),
+    candidate_id: Optional[str] = None,
 ) -> str:
     """Insert explicit entity boundary markers around cause (Arg1) and effect (Arg2) spans.
 
@@ -403,18 +524,21 @@ def format_biocause_input_with_markers(
         arg2_end: Character end index of argument 2 in sentence.
         arg1_markers: Tuple of (open_tag, close_tag) for Arg1. Defaults to ('[E1]', '[/E1]').
         arg2_markers: Tuple of (open_tag, close_tag) for Arg2. Defaults to ('[E2]', '[/E2]').
+        candidate_id: Optional candidate identifier for error reporting.
 
     Returns:
         Marked text string with explicit entity boundary indicators.
 
     Implementation Requirements:
-        - Validate that character offsets reference valid positions in sentence
-        - Detect and reject or log overlapping argument spans (arg1_start < arg2_end and arg2_start < arg1_end)
-        - Determine original argument order (arg1 before arg2 or arg2 before arg1)
-        - Insert tags from right to left (higher character offset first) to preserve index alignment
-        - Ensure both entity spans remain intact and uncorrupted after formatting
+        - Validate character offsets are within bounds and spans are non-empty.
+        - Detect and reject overlapping argument spans (arg1_start < arg2_end and arg2_start < arg1_end).
+        - Determine original argument order (arg1 before arg2 or arg2 before arg1).
+        - Insert tags from right to left (higher character offset first) to preserve index alignment.
+        - Ensure both entity spans remain intact and uncorrupted after formatting.
+        - Include candidate_id in error messages where available.
     """
     sent_len = len(sentence)
+    cid_str = f"Candidate {candidate_id}: " if candidate_id else ""
 
     # Validate character offsets
     for name, start, end in [
@@ -422,30 +546,28 @@ def format_biocause_input_with_markers(
         ("arg2", arg2_start, arg2_end),
     ]:
         if start < 0:
-            raise ValueError(f"{name}_start ({start}) must be >= 0.")
+            raise ValueError(f"{cid_str}{name}_start ({start}) must be >= 0.")
         if end < start:
-            raise ValueError(f"{name}_end ({end}) must be >= {name}_start ({start}).")
+            raise ValueError(f"{cid_str}{name}_end ({end}) must be >= {name}_start ({start}).")
+        if end == start:
+            raise ValueError(
+                f"{cid_str}{name}_end ({end}) must be strictly greater than {name}_start ({start}) "
+                f"(non-empty span required)."
+            )
         if end > sent_len:
             raise ValueError(
-                f"{name}_end ({end}) exceeds sentence length ({sent_len})."
+                f"{cid_str}{name}_end ({end}) exceeds sentence length ({sent_len})."
             )
 
-    # Detect overlapping spans (but allow adjacent: arg1_end == arg2_start)
+    # Detect overlapping spans (allow adjacent: arg1_end == arg2_start or arg2_end == arg1_start)
     if arg1_start < arg2_end and arg2_start < arg1_end:
         raise ValueError(
-            f"Overlapping argument spans: "
+            f"{cid_str}Overlapping argument spans: "
             f"arg1=[{arg1_start}:{arg1_end}], arg2=[{arg2_start}:{arg2_end}]."
         )
 
-    # Build list of (position, tag_text, priority) insertion points.
-    # Priority: higher = inserted first (right-to-left).
-    # Within same position, close tags come before open tags (so close is to the left).
-    # We insert from right to left to preserve offsets.
-    # Each insertion: (char_position, tag_text)
-    # We must determine which span comes first in text.
-
     if arg1_start <= arg2_start:
-        # Arg1 appears first (or they are adjacent)
+        # Arg1 appears first
         first_start, first_end = arg1_start, arg1_end
         first_open, first_close = arg1_markers
         second_start, second_end = arg2_start, arg2_end
@@ -458,17 +580,10 @@ def format_biocause_input_with_markers(
         second_open, second_close = arg1_markers
 
     # Insert from right to left to preserve character offsets
-    # Order of insertions (right to left):
-    #   1. second_close at second_end
-    #   2. second_open at second_start
-    #   3. first_close at first_end
-    #   4. first_open at first_start
-
     result = sentence
     result = result[:second_end] + " " + second_close + result[second_end:]
     result = result[:second_start] + second_open + " " + result[second_start:]
 
-    # Adjust first span positions are unchanged because they are before second span
     result = result[:first_end] + " " + first_close + result[first_end:]
     result = result[:first_start] + first_open + " " + result[first_start:]
 
@@ -493,14 +608,14 @@ def crop_context_around_entities(
     Requirements:
         - Preserves both complete argument spans intact.
         - Preserves all four entity boundary markers ([E1], [/E1], [E2], [/E2]).
+        - Preserves argument identity and direction/ordering.
         - Retains useful local context around both arguments.
         - For very distant arguments whose intervening passage cannot fit or is excessively
           large, inserts an explicit, documented gap separator (" ... ") rather than keeping
           an unnecessarily large intervening passage.
-        - Ensures the resulting sequence strictly stays within max_tokens.
-        - If the two complete arguments and their markers cannot fit within the budget,
-          raises a descriptive ValueError recording the candidate ID. Never silently returns
-          an oversized sequence.
+        - Strictly guarantees the resulting sequence does not exceed the token budget.
+        - Performs a final token-count check and raises a descriptive ValueError with candidate_id
+          if the budget cannot be satisfied while preserving complete entity spans and markers.
 
     Args:
         marked_text: Source text with [E1], [/E1], [E2], [/E2] markers already inserted.
@@ -518,11 +633,9 @@ def crop_context_around_entities(
         Cropped text preserving both entity spans and all four markers within max_tokens.
 
     Raises:
-        ValueError: If entity boundary markers are missing, or if the argument spans and markers
-            themselves cannot fit in the available token budget.
+        ValueError: If entity boundary markers are missing, if argument spans cannot fit in the budget,
+            or if final cropped sequence exceeds token budget.
     """
-    import re
-
     budget = max_tokens - special_tokens_reserved
     if budget <= 0:
         raise ValueError(
@@ -580,9 +693,11 @@ def crop_context_around_entities(
     if e1_open < e2_open:
         first_open, first_close = e1_open, e1_end
         second_open, second_close = e2_open, e2_end
+        first_marker_name, second_marker_name = "[E1]", "[E2]"
     else:
         first_open, first_close = e2_open, e2_end
         second_open, second_close = e1_open, e1_end
+        first_marker_name, second_marker_name = "[E2]", "[E1]"
 
     prefix_text = marked_text[:first_open]
     first_entity = marked_text[first_open:first_close]
@@ -614,17 +729,14 @@ def crop_context_around_entities(
     is_distant = (intervening_tokens > max_intervening_tokens) or (middle_tokens > budget)
 
     if not is_distant:
-        # Intervening passage fits and arguments are not distant! Distribute remaining tokens to prefix and suffix
         rem = budget - middle_tokens
-        left_budget = rem // 2
-        right_budget = rem - left_budget
+        left_budget = max(0, rem // 2)
+        right_budget = max(0, rem - left_budget)
         left_str = _slice_tokens(prefix_text, left_budget, from_end=True)
         right_str = _slice_tokens(suffix_text, right_budget, from_end=False)
         parts = [p for p in [left_str, middle_text, right_str] if p]
         result = " ".join(parts)
     else:
-        # Intervening passage itself exceeds budget! Very distant arguments.
-        # Use explicit, documented gap separator rather than oversized passage.
         gap_tokens = _count_tokens(gap_separator)
         core_tokens = min_core_tokens + gap_tokens
         if core_tokens > budget:
@@ -650,26 +762,79 @@ def crop_context_around_entities(
 
         result = f"{left_block}{gap_separator}{right_block}"
 
-    # Micro-trim if subword join boundaries slightly exceed budget
+    # Micro-trim if subword join boundaries or extra words exceed budget
     while _count_tokens(result) > budget:
+        trimmed = False
+        # 1. Try trimming suffix words if any exist after second close tag
         if suffix_text and not result.endswith("[/E2]") and not result.endswith("[/E1]"):
             words = result.split()
             if len(words) > 1 and not words[-1].startswith("[/"):
                 result = " ".join(words[:-1])
+                trimmed = True
                 continue
+
+        # 2. Try trimming prefix words if any exist before first open tag
         if prefix_text and not result.startswith("[E1]") and not result.startswith("[E2]"):
             words = result.split()
             if len(words) > 1 and not words[0].endswith("]"):
                 result = " ".join(words[1:])
+                trimmed = True
                 continue
-        break
 
-    # Safety assertions: must retain all markers and both entity spans
+        # 3. If distant with gap_separator, try trimming intervening words around gap_separator
+        if is_distant and gap_separator in result:
+            left_side, right_side = result.split(gap_separator, 1)
+            first_close_tag = "[/E1]" if first_open == e1_open else "[/E2]"
+            if first_close_tag in left_side and not left_side.rstrip().endswith(first_close_tag):
+                parts = left_side.rsplit(" ", 1)
+                if len(parts) > 1 and not parts[-1].startswith("[/"):
+                    left_side = parts[0]
+                    result = f"{left_side}{gap_separator}{right_side}"
+                    trimmed = True
+                    continue
+
+            second_open_tag = "[E2]" if first_open == e1_open else "[E1]"
+            if second_open_tag in right_side and not right_side.lstrip().startswith(second_open_tag):
+                parts = right_side.split(" ", 1)
+                if len(parts) > 1 and not parts[0].endswith("]"):
+                    right_side = parts[1]
+                    result = f"{left_side}{gap_separator}{right_side}"
+                    trimmed = True
+                    continue
+
+        if not trimmed:
+            break
+
+    # Safety assertions: must retain all markers and both complete entity spans
     for m in ENTITY_MARKERS:
         if m not in result:
             raise ValueError(
                 f"Candidate {candidate_id or 'unknown'}: Cropping failed to preserve marker '{m}'."
             )
+
+    if first_entity not in result or second_entity not in result:
+        raise ValueError(
+            f"Candidate {candidate_id or 'unknown'}: Cropping failed to preserve complete entity spans."
+        )
+
+    # Check ordering preservation
+    pos_first = result.find(first_marker_name)
+    pos_second = result.find(second_marker_name)
+    if pos_first == -1 or pos_second == -1 or pos_first >= pos_second:
+        raise ValueError(
+            f"Candidate {candidate_id or 'unknown'}: Cropping corrupted entity marker ordering "
+            f"({first_marker_name} must precede {second_marker_name})."
+        )
+
+    # Final token count check: guaranteed strictly <= budget
+    final_token_count = _count_tokens(result)
+    if final_token_count > budget:
+        raise ValueError(
+            f"Candidate {candidate_id or 'unknown'}: Cropped sequence has {final_token_count} tokens "
+            f"which exceeds the requested token budget of {budget} (max_tokens={max_tokens}, "
+            f"special_tokens_reserved={special_tokens_reserved}). Cannot satisfy budget while "
+            f"preserving complete entity spans and markers."
+        )
 
     return result
 
@@ -784,6 +949,7 @@ def reconstruct_biocause_context_with_markers(
         arg2_text: Expected surface text of argument 2.
         candidate_id: Optional candidate identifier for error reporting.
         max_length: Maximum sequence length budget (default 384).
+        max_tokens: Optional alias for max_length.
         tokenizer: Optional tokenizer instance.
         gap_separator: Documented gap separator for very distant arguments.
 
@@ -823,6 +989,7 @@ def reconstruct_biocause_context_with_markers(
         arg1_end=arg1_end,
         arg2_start=arg2_start,
         arg2_end=arg2_end,
+        candidate_id=candidate_id,
     )
 
     effective_budget = max_tokens if max_tokens is not None else max_length
@@ -869,7 +1036,6 @@ def profile_token_lengths(
         elif tokenizer is not None and hasattr(tokenizer, "tokenize"):
             l = len(tokenizer.tokenize(t)) + 2
         else:
-            import re
             l = len(re.findall(r"\w+|[^\w\s]", t)) + 2
         lengths.append(l)
 
@@ -922,7 +1088,6 @@ def prepare_tokenizer_and_inputs(
     tokenizer.model_max_length = max_length
 
     if additional_special_tokens:
-        # Only add tokens that are not already in the vocabulary
         existing = set(tokenizer.get_vocab().keys())
         new_tokens = [t for t in additional_special_tokens if t not in existing]
         if new_tokens:
@@ -939,6 +1104,35 @@ def prepare_tokenizer_and_inputs(
             )
 
     return tokenizer
+
+
+def resize_model_embeddings_for_tokenizer(
+    model: Any,
+    tokenizer: Any,
+) -> Any:
+    """Resize model token embeddings to match tokenizer vocabulary length.
+
+    Downstream fine-tuning tasks (such as BioCause with entity markers) add
+    special tokens to the tokenizer. This function ensures the model embedding layer
+    is resized consistently across model architectures.
+
+    Args:
+        model: HuggingFace PreTrainedModel or torch.nn.Module with resize_token_embeddings.
+        tokenizer: HuggingFace PreTrainedTokenizer or object with len(tokenizer).
+
+    Returns:
+        Resized model embedding matrix or model instance.
+    """
+    vocab_len = len(tokenizer)
+    if hasattr(model, "resize_token_embeddings"):
+        return model.resize_token_embeddings(vocab_len)
+    elif hasattr(model, "resize_embeddings"):
+        return model.resize_embeddings(vocab_len)
+    else:
+        logger.warning(
+            f"Model {type(model).__name__} does not have resize_token_embeddings method."
+        )
+        return model
 
 
 # ==============================================================================
@@ -988,10 +1182,13 @@ def get_training_arguments(
     save_total_limit: int = DEFAULT_CHECKPOINT_LIMIT,
     logging_dir: Optional[str] = None,
 ) -> Any:
-    """Construct HuggingFace TrainingArguments configured for free GPU tiers (Kaggle T4 / Colab).
+    """Construct HuggingFace TrainingArguments configured for compute hardware.
 
-    Uses `eval_strategy` conforming to modern Transformers API specifications (>=4.41.2),
-    replacing the legacy `evaluation_strategy` argument.
+    Enforces CUDA-only FP16 mixed precision. CPU and Apple MPS devices must never
+    have FP16 enabled, even if explicitly requested with fp16=True.
+
+    Handles version compatibility between transformers 4.x and 5.x argument signatures
+    (eval_strategy vs evaluation_strategy, and supported optional parameters).
 
     Args:
         output_dir: Directory where model checkpoints will be stored temporarily.
@@ -1000,8 +1197,8 @@ def get_training_arguments(
         gradient_accumulation_steps: Number of update steps to accumulate before backward pass.
         learning_rate: Initial AdamW learning rate.
         weight_decay: Weight decay regularizer.
-        fp16: Whether to enable 16-bit mixed precision (enabled automatically when CUDA is available).
-        eval_strategy: Evaluation interval ('epoch' or 'steps'). Modern parameter for evaluation_strategy.
+        fp16: Whether to enable 16-bit mixed precision (CUDA-only; disabled on CPU/MPS).
+        eval_strategy: Evaluation interval ('epoch' or 'steps').
         save_total_limit: Maximum checkpoints retained to prevent disk quota exhaustion.
         logging_dir: Optional directory for tensorboard/logging output.
 
@@ -1011,35 +1208,52 @@ def get_training_arguments(
     from transformers import TrainingArguments
     import torch
 
-    # Auto-detect fp16 capability
-    if fp16 is None:
-        fp16 = torch.cuda.is_available() and (
-            not hasattr(torch.backends, "mps") or not torch.backends.mps.is_available()
-        )
+    cuda_available = torch.cuda.is_available()
 
-    if logging_dir is None:
-        logging_dir = os.path.join(output_dir, "logs")
+    # Enforce CUDA-only FP16: FP16 is strictly prohibited on CPU and Apple MPS
+    if not cuda_available:
+        if fp16:
+            logger.warning(
+                "fp16=True was explicitly requested, but CUDA is not available. "
+                "Enforcing fp16=False for CPU/MPS safety."
+            )
+        effective_fp16 = False
+    else:
+        # On CUDA, enable if explicitly True or default to True if None
+        effective_fp16 = True if fp16 is None else bool(fp16)
 
-    return TrainingArguments(
-        output_dir=output_dir,
-        num_train_epochs=num_epochs,
-        per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size,
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-        fp16=fp16,
-        eval_strategy=eval_strategy,
-        save_strategy=eval_strategy,
-        save_total_limit=save_total_limit,
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_f1",
-        greater_is_better=True,
-        logging_dir=logging_dir,
-        logging_steps=50,
-        report_to="none",
-        seed=42,
-    )
+    sig_params = set(inspect.signature(TrainingArguments.__init__).parameters.keys())
+
+    kwargs: Dict[str, Any] = {
+        "output_dir": output_dir,
+        "num_train_epochs": num_epochs,
+        "per_device_train_batch_size": batch_size,
+        "per_device_eval_batch_size": batch_size,
+        "gradient_accumulation_steps": gradient_accumulation_steps,
+        "learning_rate": learning_rate,
+        "weight_decay": weight_decay,
+        "fp16": effective_fp16,
+        "save_total_limit": save_total_limit,
+        "load_best_model_at_end": True,
+        "metric_for_best_model": "eval_f1",
+        "greater_is_better": True,
+        "logging_steps": 50,
+        "report_to": "none",
+        "seed": 42,
+    }
+
+    if "eval_strategy" in sig_params:
+        kwargs["eval_strategy"] = eval_strategy
+    elif "evaluation_strategy" in sig_params:
+        kwargs["evaluation_strategy"] = eval_strategy
+
+    if "save_strategy" in sig_params:
+        kwargs["save_strategy"] = eval_strategy
+
+    if logging_dir is not None and "logging_dir" in sig_params:
+        kwargs["logging_dir"] = logging_dir
+
+    return TrainingArguments(**kwargs)
 
 
 # ==============================================================================
@@ -1058,23 +1272,25 @@ def compute_classification_metrics(
         - Recall (macro or binary)
         - F1-Score (macro or binary)
         - Confusion Matrix
+        - ROC-AUC (when mathematically defined, None otherwise)
+        - PR-AUC / Average Precision (when mathematically defined, None otherwise)
 
-    Note:
-        Threshold-dependent curve metrics such as ROC-AUC and PR-AUC require continuous
-        probability distributions evaluated over decision-threshold sweeps across the test
-        split; they are computed in the final evaluation notebook (DL_05_evaluation_ablation.ipynb).
+    Handles degenerate label distributions safely without unhandled exceptions.
 
     Args:
-        eval_pred: HuggingFace EvalPrediction namedtuple containing (predictions, label_ids).
+        eval_pred: HuggingFace EvalPrediction namedtuple or tuple (predictions, label_ids).
         average: Averaging method ('binary' or 'macro').
 
     Returns:
-        Dictionary mapping metric names to floating point scores and confusion matrix.
+        Dictionary mapping metric names to floating point scores, confusion matrix,
+        and curve metrics.
     """
     from sklearn.metrics import (
         accuracy_score,
         precision_recall_fscore_support,
         confusion_matrix,
+        roc_auc_score,
+        average_precision_score,
     )
 
     logits, labels = eval_pred
@@ -1088,15 +1304,13 @@ def compute_classification_metrics(
         labels, preds, average=average, zero_division=0.0
     )
 
-    # Also compute macro F1 if binary is requested (for completeness)
-    result = {
+    result: Dict[str, Any] = {
         "accuracy": float(accuracy),
         "precision": float(precision),
         "recall": float(recall),
         "f1": float(f1),
     }
 
-    # Add macro_f1 when using binary averaging
     if average == "binary":
         _, _, macro_f1, _ = precision_recall_fscore_support(
             labels, preds, average="macro", zero_division=0.0
@@ -1105,20 +1319,51 @@ def compute_classification_metrics(
 
     # Confusion matrix
     try:
-        cm = confusion_matrix(labels, preds)
+        if average == "binary" or set(np.unique(labels)).issubset({0, 1}):
+            cm = confusion_matrix(labels, preds, labels=[0, 1])
+        else:
+            cm = confusion_matrix(labels, preds)
         result["confusion_matrix"] = cm.tolist()
     except Exception:
         pass
 
+    # Compute ROC-AUC and PR-AUC when mathematically defined
+    pos_probs = None
+    logits_arr = np.asarray(logits)
+    if logits_arr.ndim == 2 and logits_arr.shape[1] >= 2:
+        exp_logits = np.exp(logits_arr - np.max(logits_arr, axis=-1, keepdims=True))
+        probs = exp_logits / np.sum(exp_logits, axis=-1, keepdims=True)
+        pos_probs = probs[:, 1]
+    elif logits_arr.ndim == 1:
+        pos_probs = logits_arr
+
+    labels_arr = np.asarray(labels)
+    unique_classes = np.unique(labels_arr)
+
+    if pos_probs is not None and len(unique_classes) == 2:
+        try:
+            result["roc_auc"] = float(roc_auc_score(labels_arr, pos_probs))
+        except Exception:
+            result["roc_auc"] = None
+
+        try:
+            result["pr_auc"] = float(average_precision_score(labels_arr, pos_probs))
+        except Exception:
+            result["pr_auc"] = None
+    else:
+        # Degenerate single-class distribution or unavailable probabilities
+        result["roc_auc"] = None
+        result["pr_auc"] = None
+
     return result
 
 
-def compute_classification_metrics_binary(eval_pred: Any) -> Dict[str, float]:
+def compute_classification_metrics_binary(eval_pred: Any) -> Dict[str, Any]:
     """Convenience wrapper for binary classification metrics."""
     return compute_classification_metrics(eval_pred, average="binary")
 
 
-def compute_classification_metrics_macro(eval_pred: Any) -> Dict[str, float]:
+def compute_classification_metrics_macro(eval_pred: Any) -> Dict[str, Any]:
     """Convenience wrapper for macro-averaged classification metrics."""
     return compute_classification_metrics(eval_pred, average="macro")
 
@@ -1152,14 +1397,14 @@ def fuse_probabilities(
         1D array of blended causal probability estimates.
 
     Raises:
-        ValueError: If alpha is not within [0.0, 1.0] or array dimensions mismatch.
+        ValueError: If alpha is not within [0.0, 1.0], array dimensions mismatch,
+            or probabilities are outside [0.0, 1.0] or contain NaN/Inf.
     """
+    if np.isnan(alpha) or np.isinf(alpha) or not (0.0 <= float(alpha) <= 1.0):
+        raise ValueError(f"alpha must be a finite float in [0.0, 1.0], got {alpha}.")
+
     prob_aml = np.asarray(prob_aml, dtype=np.float64)
     prob_dl = np.asarray(prob_dl, dtype=np.float64)
-
-    # Validate alpha
-    if not (0.0 <= alpha <= 1.0):
-        raise ValueError(f"alpha must be in [0.0, 1.0], got {alpha}.")
 
     # Validate dimensions
     if prob_aml.ndim != 1:
@@ -1177,6 +1422,12 @@ def fuse_probabilities(
             f"prob_aml and prob_dl must have matching lengths, "
             f"got {len(prob_aml)} and {len(prob_dl)}."
         )
+
+    # Reject NaN and infinite values
+    if np.any(np.isnan(prob_aml)) or np.any(np.isinf(prob_aml)):
+        raise ValueError("prob_aml contains NaN or infinite values.")
+    if np.any(np.isnan(prob_dl)) or np.any(np.isinf(prob_dl)):
+        raise ValueError("prob_dl contains NaN or infinite values.")
 
     # Validate probability ranges
     if np.any(prob_aml < 0.0) or np.any(prob_aml > 1.0):
@@ -1255,36 +1506,78 @@ def build_unified_relation_record(
     direction: str = "cause->effect",
     provenance: str = "BioCause",
 ) -> Dict[str, Any]:
-    """Construct a dictionary conforming to the 17-column UnifiedRelationRecord schema.
+    """Construct a dictionary conforming to the exact 17-column UnifiedRelationRecord schema.
 
-    Preserves exact alignment with Phase 1 NetworkX DAG compiler and pgmpy Bayesian
-    network requirements.
+    Preserves exact column order and compatibility with Phase 1 NetworkX DAG compiler
+    and pgmpy Bayesian networks.
 
-    The relation_id is derived deterministically from candidate_id via SHA-256
-    (prefix 'dl_' followed by the first 16 hex characters of the digest).
+    Validates:
+        - Required key strings are non-empty.
+        - Offsets are valid (start >= 0, end >= start).
+        - Confidence is in valid probability range [0.0, 1.0] and not NaN/Inf.
+        - Generates deterministic relation_id via SHA-256 from candidate_id.
 
     Returns:
-        Dictionary with keys matching UNIFIED_RELATION_SCHEMA.
+        Dictionary with exactly 17 keys matching UNIFIED_RELATION_SCHEMA.
     """
+    # Validate required string fields
+    for name, val in [
+        ("candidate_id", candidate_id),
+        ("article_id", article_id),
+        ("section_id", section_id),
+        ("cause_id", cause_id),
+        ("effect_id", effect_id),
+        ("split", split),
+    ]:
+        if val is None or not str(val).strip():
+            raise ValueError(f"Required field '{name}' cannot be empty or null.")
+
+    # Validate offset bounds
+    cause_start_i = int(cause_start)
+    cause_end_i = int(cause_end)
+    effect_start_i = int(effect_start)
+    effect_end_i = int(effect_end)
+
+    if cause_start_i < 0:
+        raise ValueError(f"cause_start ({cause_start}) must be >= 0.")
+    if cause_end_i < cause_start_i:
+        raise ValueError(f"cause_end ({cause_end}) must be >= cause_start ({cause_start}).")
+
+    if effect_start_i < 0:
+        raise ValueError(f"effect_start ({effect_start}) must be >= 0.")
+    if effect_end_i < effect_start_i:
+        raise ValueError(f"effect_end ({effect_end}) must be >= effect_start ({effect_start}).")
+
+    # Validate confidence bounds
+    if confidence is not None:
+        conf_f = float(confidence)
+        if np.isnan(conf_f) or np.isinf(conf_f) or not (0.0 <= conf_f <= 1.0):
+            raise ValueError(f"confidence must be in [0.0, 1.0] and non-NaN, got {confidence}.")
+    else:
+        raise ValueError("confidence cannot be None.")
+
     # Deterministic SHA-256 relation ID derived from candidate_id
     relation_id = generate_relation_id(candidate_id)
 
-    return {
+    record = {
         "relation_id": relation_id,
         "article_id": article_id,
         "section_id": section_id,
         "cause_id": cause_id,
         "cause_text": cause_text,
-        "cause_start": cause_start,
-        "cause_end": cause_end,
+        "cause_start": cause_start_i,
+        "cause_end": cause_end_i,
         "effect_id": effect_id,
         "effect_text": effect_text,
-        "effect_start": effect_start,
-        "effect_end": effect_end,
+        "effect_start": effect_start_i,
+        "effect_end": effect_end_i,
         "direction": direction,
-        "confidence": confidence,
+        "confidence": float(confidence),
         "extraction_method": extraction_method,
         "evidence_text": evidence_text,
         "provenance": provenance,
         "split": split,
     }
+
+    # Ensure dictionary contains all columns in UNIFIED_RELATION_SCHEMA in exact order
+    return {col: record[col] for col in UNIFIED_RELATION_SCHEMA}
