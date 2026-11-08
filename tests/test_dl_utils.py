@@ -1239,6 +1239,234 @@ class TestConstants(unittest.TestCase):
         self.assertEqual(train["positive"], 621)
         self.assertEqual(train["negative"], 9465)
 
+    def test_biocause_model_eligible_counts(self):
+        train = dl_utils.BIOCAUSE_MODEL_ELIGIBLE_COUNTS["train"]
+        self.assertEqual(train["total"], 9908)
+        self.assertEqual(train["positive"], 620)
+        self.assertEqual(train["negative"], 9288)
+        val = dl_utils.BIOCAUSE_MODEL_ELIGIBLE_COUNTS["validation"]
+        self.assertEqual(val["total"], 1884)
+        self.assertEqual(val["positive"], 131)
+        test = dl_utils.BIOCAUSE_MODEL_ELIGIBLE_COUNTS["test"]
+        self.assertEqual(test["total"], 1394)
+        self.assertEqual(test["positive"], 100)
+
+
+# ===========================================================================
+# 19. BioCause Source Reconstruction & Eligibility Invariants
+# ===========================================================================
+class TestBioCauseSourceReconstructionAndEligibility(unittest.TestCase):
+    """Verify source reconstruction, eligibility filtering, diagnostics, and invariants."""
+
+    def setUp(self):
+        self.source_text = "Expression of IL-6 promotes vascular permeability in inflammatory lesions."
+        # IL-6 is [14:18], vascular permeability is [28:49]
+        self.valid_candidate = {
+            "candidate_id": "cand_001",
+            "article_id": "art_01",
+            "section_id": "sec_01",
+            "arg1_id": "T1",
+            "arg1_text": "IL-6",
+            "arg1_start": 14,
+            "arg1_end": 18,
+            "arg2_id": "T2",
+            "arg2_text": "vascular permeability",
+            "arg2_start": 28,
+            "arg2_end": 49,
+            "label": 1,
+            "split": "train",
+            "between_text": " promotes ",
+        }
+        self.invalid_overlapping_candidate = {
+            "candidate_id": "cand_002",
+            "article_id": "art_01",
+            "section_id": "sec_01",
+            "arg1_id": "T3",
+            "arg1_text": "IL-6 promotes",
+            "arg1_start": 14,
+            "arg1_end": 27,
+            "arg2_id": "T4",
+            "arg2_text": "promotes vascular",
+            "arg2_start": 19,
+            "arg2_end": 36,
+            "label": 0,
+            "split": "train",
+            "between_text": "",
+        }
+        self.invalid_oob_candidate = {
+            "candidate_id": "cand_003",
+            "article_id": "art_01",
+            "section_id": "sec_01",
+            "arg1_id": "T5",
+            "arg1_text": "nonexistent",
+            "arg1_start": 200,
+            "arg1_end": 211,
+            "arg2_id": "T6",
+            "arg2_text": "lesions",
+            "arg2_start": 60,
+            "arg2_end": 67,
+            "label": 0,
+            "split": "train",
+            "between_text": "",
+        }
+
+    def test_1_valid_candidate_source_reconstruction(self):
+        marked = dl_utils.reconstruct_biocause_context_with_markers(
+            section_text=self.source_text,
+            arg1_start=self.valid_candidate["arg1_start"],
+            arg1_end=self.valid_candidate["arg1_end"],
+            arg2_start=self.valid_candidate["arg2_start"],
+            arg2_end=self.valid_candidate["arg2_end"],
+            arg1_text=self.valid_candidate["arg1_text"],
+            arg2_text=self.valid_candidate["arg2_text"],
+            candidate_id=self.valid_candidate["candidate_id"],
+        )
+        self.assertIn("[E1] IL-6 [/E1]", marked)
+        self.assertIn("[E2] vascular permeability [/E2]", marked)
+
+    def test_2_failed_reconstruction_does_not_generate_fallback_text(self):
+        cands = [self.valid_candidate, self.invalid_overlapping_candidate]
+        reconstructed = []
+        for c in cands:
+            try:
+                m = dl_utils.reconstruct_biocause_context_with_markers(
+                    section_text=self.source_text,
+                    arg1_start=c["arg1_start"],
+                    arg1_end=c["arg1_end"],
+                    arg2_start=c["arg2_start"],
+                    arg2_end=c["arg2_end"],
+                    arg1_text=c["arg1_text"],
+                    arg2_text=c["arg2_text"],
+                    candidate_id=c["candidate_id"],
+                )
+                reconstructed.append({"valid": True, "marked_text": m, "diag": ""})
+            except Exception as e:
+                reconstructed.append({"valid": False, "marked_text": None, "diag": str(e)})
+
+        self.assertTrue(reconstructed[0]["valid"])
+        self.assertIsNotNone(reconstructed[0]["marked_text"])
+        self.assertFalse(reconstructed[1]["valid"])
+        self.assertIsNone(reconstructed[1]["marked_text"])
+        self.assertIn("Overlapping", reconstructed[1]["diag"])
+
+    def test_3_invalid_candidates_explicitly_marked_and_retain_diagnostics(self):
+        cands = [self.invalid_oob_candidate]
+        diagnostics = []
+        for c in cands:
+            try:
+                dl_utils.reconstruct_biocause_context_with_markers(
+                    section_text=self.source_text,
+                    arg1_start=c["arg1_start"],
+                    arg1_end=c["arg1_end"],
+                    arg2_start=c["arg2_start"],
+                    arg2_end=c["arg2_end"],
+                    arg1_text=c["arg1_text"],
+                    arg2_text=c["arg2_text"],
+                    candidate_id=c["candidate_id"],
+                )
+            except Exception as e:
+                diagnostics.append({"candidate_id": c["candidate_id"], "error": str(e)})
+
+        self.assertEqual(len(diagnostics), 1)
+        self.assertEqual(diagnostics[0]["candidate_id"], "cand_003")
+        self.assertIn("Invalid", diagnostics[0]["error"])
+
+    def test_4_invalid_candidates_excluded_from_model_ready_splits(self):
+        df_raw = pd.DataFrame([
+            {**self.valid_candidate, "candidate_id": "c1", "split": "train"},
+            {**self.invalid_overlapping_candidate, "candidate_id": "c2", "split": "train"},
+            {**self.valid_candidate, "candidate_id": "c3", "split": "validation"},
+        ])
+        df_raw["reconstruction_valid"] = [True, False, True]
+        df_raw["marked_text"] = ["[E1] A [/E1] [E2] B [/E2]", None, "[E1] C [/E1] [E2] D [/E2]"]
+
+        df_eligible = df_raw[df_raw["reconstruction_valid"]].copy()
+        self.assertEqual(len(df_eligible), 2)
+        self.assertNotIn("c2", df_eligible["candidate_id"].values)
+        self.assertTrue(df_eligible["marked_text"].notna().all())
+
+    def test_5_valid_candidates_retain_both_spans_and_all_four_markers(self):
+        marked = dl_utils.reconstruct_biocause_context_with_markers(
+            section_text=self.source_text,
+            arg1_start=self.valid_candidate["arg1_start"],
+            arg1_end=self.valid_candidate["arg1_end"],
+            arg2_start=self.valid_candidate["arg2_start"],
+            arg2_end=self.valid_candidate["arg2_end"],
+            arg1_text=self.valid_candidate["arg1_text"],
+            arg2_text=self.valid_candidate["arg2_text"],
+            candidate_id=self.valid_candidate["candidate_id"],
+        )
+        for m in ["[E1]", "[/E1]", "[E2]", "[/E2]"]:
+            self.assertIn(m, marked)
+        self.assertIn("IL-6", marked)
+        self.assertIn("vascular permeability", marked)
+
+    def test_6_candidate_ids_unique_and_traceable(self):
+        df = pd.DataFrame([
+            {"candidate_id": "cand_A", "reconstruction_valid": True},
+            {"candidate_id": "cand_B", "reconstruction_valid": False},
+            {"candidate_id": "cand_C", "reconstruction_valid": True},
+        ])
+        self.assertEqual(df["candidate_id"].nunique(), len(df))
+        eligible = df[df["reconstruction_valid"]]
+        self.assertEqual(eligible["candidate_id"].nunique(), len(eligible))
+
+    def test_7_article_level_split_isolation_maintained_after_exclusion(self):
+        df = pd.DataFrame([
+            {"candidate_id": "c1", "article_id": "art_1", "split": "train", "reconstruction_valid": True},
+            {"candidate_id": "c2", "article_id": "art_1", "split": "train", "reconstruction_valid": False},
+            {"candidate_id": "c3", "article_id": "art_2", "split": "validation", "reconstruction_valid": True},
+            {"candidate_id": "c4", "article_id": "art_3", "split": "test", "reconstruction_valid": True},
+        ])
+        eligible = df[df["reconstruction_valid"]]
+        train_arts = set(eligible[eligible["split"] == "train"]["article_id"])
+        val_arts = set(eligible[eligible["split"] == "validation"]["article_id"])
+        test_arts = set(eligible[eligible["split"] == "test"]["article_id"])
+
+        self.assertTrue(len(train_arts & val_arts) == 0)
+        self.assertTrue(len(train_arts & test_arts) == 0)
+        self.assertTrue(len(val_arts & test_arts) == 0)
+
+    def test_8_model_eligible_candidate_tokens_within_budget(self):
+        long_prefix = "Word " * 200
+        sec = f"{long_prefix}IL-6 promotes vascular permeability {long_prefix}"
+        a1_start = len(long_prefix)
+        a1_end = a1_start + 4
+        a2_start = a1_end + len(" promotes ")
+        a2_end = a2_start + len("vascular permeability")
+
+        cropped = dl_utils.reconstruct_biocause_context_with_markers(
+            section_text=sec,
+            arg1_start=a1_start,
+            arg1_end=a1_end,
+            arg2_start=a2_start,
+            arg2_end=a2_end,
+            max_length=384,
+        )
+        tokens = cropped.split()
+        self.assertLessEqual(len(tokens), 384)
+        self.assertIn("[E1]", cropped)
+        self.assertIn("[E2]", cropped)
+
+    def test_9_training_dynamic_class_weight_uses_only_model_eligible_candidates(self):
+        weight = dl_utils.calculate_dynamic_class_weight(n_negative=9288, n_positive=620)
+        self.assertAlmostEqual(weight, 14.9806, places=3)
+        self.assertNotEqual(weight, 9465 / 621)
+
+    def test_10_diagnostics_export_contains_invalid_candidate_ids_and_reasons(self):
+        df_invalid = pd.DataFrame([
+            {"candidate_id": "cand_002", "split": "train", "diagnostic": "Overlapping argument spans"},
+            {"candidate_id": "cand_003", "split": "val", "diagnostic": "Offset out of section bounds"},
+        ])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            export_path = Path(tmpdir) / "dl_biocause_reconstruction_diagnostics.csv"
+            dl_utils.export_predictions(df_invalid, str(export_path), format_type="csv")
+            readback = pd.read_csv(export_path)
+            self.assertEqual(len(readback), 2)
+            self.assertIn("cand_002", readback["candidate_id"].values)
+            self.assertIn("cand_003", readback["candidate_id"].values)
+            self.assertIn("diagnostic", readback.columns)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

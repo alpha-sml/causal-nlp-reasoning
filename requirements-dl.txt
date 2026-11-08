@@ -3,7 +3,7 @@
 # Do not re-install or overwrite PyTorch if a compatible GPU build is already present.
 
 torch>=2.2.0
-transformers>=4.41.2
+transformers>=4.41.2,<5.0.0
 datasets>=2.19.0
 accelerate>=0.30.0
 scikit-learn>=1.4.0

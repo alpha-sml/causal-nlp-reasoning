@@ -180,12 +180,17 @@ The BioCause candidate generation pipeline extracts every co-occurring entity pa
 
 ### Dynamic Class Imbalance Mitigation
 The candidate generation process results in severe class imbalance:
-- **Train split**: 621 positive / 9,465 negative = **15.24:1 negative-to-positive ratio**.
-- **Validation split**: 131 positive / 1,783 negative = **13.61:1 ratio**.
-- **Test split**: 100 positive / 1,308 negative = **13.08:1 ratio**.
+- **Raw candidate audit counts**:
+  - **Train split**: 621 positive / 9,465 negative = **15.24:1 negative-to-positive ratio**.
+  - **Validation split**: 131 positive / 1,783 negative = **13.61:1 ratio**.
+  - **Test split**: 100 positive / 1,308 negative = **13.08:1 ratio**.
+- **Model-eligible source-verified counts** (excluding 222 invalid reconstructions):
+  - **Train split**: 620 positive / 9,288 negative = **14.98:1 ratio**.
+  - **Validation split**: 131 positive / 1,753 negative = **13.38:1 ratio**.
+  - **Test split**: 100 positive / 1,294 negative = **12.94:1 ratio**.
 
-To prevent the model from collapsing to the majority negative class, positive class loss weights must be computed dynamically strictly from training data:
-$$\text{pos\_weight} = \frac{N_{\text{train, neg}}}{N_{\text{train, pos}}} = \frac{9465}{621} \approx 15.2415$$
+To prevent the model from collapsing to the majority negative class, positive class loss weights must be computed dynamically strictly from model-eligible training data:
+$$\text{pos\_weight} = \frac{N_{\text{eligible, train, neg}}}{N_{\text{eligible, train, pos}}} = \frac{9288}{620} \approx 14.9806$$
 Weights must **never** be derived using validation or test split labels.
 
 ---
@@ -326,14 +331,21 @@ The data preparation pipeline (`DL_01_data_preparation.ipynb`) enforces a strict
 - The canonical pipeline **never** silently generates or substitutes synthetic/mock data.
 - Synthetic fixtures are strictly confined to the offline unit test suite (`tests/test_dl_utils.py`).
 
-### BioCause Source Context Reconstruction & Token Budget
+### BioCause Source Context Reconstruction & Model-Eligible Filtering
 In Phase 1, `biocause_candidates.csv` exports argument spans and text, but does not export full section text (it only contains `between_text`).
 In Task 1:
 1. `resolve_biocause_section_path` and `load_biocause_section_text` locate and load the complete source `.txt` file using `section_id` from `data/raw/biocause/BioCause_corpus/` (or fallback `data/raw/biocause/`).
 2. `reconstruct_biocause_context_with_markers` verifies that character offsets match `arg1_text` and `arg2_text` (allowing documented newline normalization `c.replace("\n", " ") == arg_text`).
 3. Explicit argument boundary markers `[E1]...[/E1]` and `[E2]...[/E2]` are inserted into the complete source context (never substituting `between_text`).
 4. `crop_context_around_entities` crops context around both entity spans to fit within `MAX_LENGTH = 384` tokens (including special tokens). If arguments are distant, an explicit gap separator (`" ... "`) is inserted. Both complete entity spans and all four markers are guaranteed intact. If spans cannot fit or exceed the budget, a descriptive `ValueError` is raised recording the candidate ID.
-5. **Actionable Diagnostics for Invalid Candidates**: Across the 13,408 BioCause candidates, source standoff annotations contain 222 candidate pairs with anomalies (188 overlapping argument spans, 22 span-crop limits, and 12 out-of-bounds standoff offsets). In accordance with the Task 1 specification, these candidates are **never silently discarded**; they are logged with actionable diagnostics in `DL_01_data_preparation.ipynb` and formatted with boundary markers to preserve full split integrity (10,086 train, 1,914 val, 1,408 test) across all exported datasets.
+5. **No Synthetic Fallback Contexts**: For candidates where source reconstruction fails, synthetic sentences or concatenated argument text from `between_text` are strictly prohibited. The audit sets `reconstruction_valid = False` and `marked_text = None`.
+6. **Model-Eligible Candidate Filtering**: Invalid reconstructions are excluded from model-ready training splits because corrupt offsets or truncated argument spans compromise transformer bidirectional attention. The model-ready splits contain strictly source-verified candidates:
+   - **Train**: 9,908 candidates (620 positive, 9,288 negative)
+   - **Validation**: 1,884 candidates (131 positive, 1,753 negative)
+   - **Test**: 1,394 candidates (100 positive, 1,294 negative)
+7. **Diagnostics CSV Export**: All 222 invalid candidate pairs are exported to `data/processed/dl_biocause_reconstruction_diagnostics.csv` with their original candidate identifiers, article IDs, section IDs, offsets, and actionable error diagnostics (188 overlapping spans, 22 crop-budget limits, 12 out-of-bounds standoff offsets).
+8. **Dynamic Training Loss Weight**: Recomputed strictly from model-eligible training candidates:
+   $$w_{\text{pos}} = \frac{N_{\text{eligible, train, neg}}}{N_{\text{eligible, train, pos}}} = \frac{9288}{620} \approx 14.9806$$
 
 ### Expected Processed Outputs (from DL_01)
 
@@ -342,9 +354,10 @@ In Task 1:
 | `dl_corr2cause_train.csv` | 205,734 | Corr2Cause training split |
 | `dl_corr2cause_val.csv` | 1,076 | Corr2Cause validation split |
 | `dl_corr2cause_test.csv` | 1,162 | Corr2Cause test split |
-| `dl_biocause_train.csv` | 10,086 | BioCause training candidates with reconstructed entity markers |
-| `dl_biocause_val.csv` | 1,914 | BioCause validation candidates with reconstructed entity markers |
-| `dl_biocause_test.csv` | 1,408 | BioCause test candidates with reconstructed entity markers |
+| `dl_biocause_train.csv` | 9,908 | Model-eligible BioCause training candidates with verified entity markers |
+| `dl_biocause_val.csv` | 1,884 | Model-eligible BioCause validation candidates with verified entity markers |
+| `dl_biocause_test.csv` | 1,394 | Model-eligible BioCause test candidates with verified entity markers |
+| `dl_biocause_reconstruction_diagnostics.csv` | 222 | Complete audit diagnostics for invalid BioCause candidate pairs |
 
 ---
 

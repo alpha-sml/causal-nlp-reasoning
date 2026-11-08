@@ -108,11 +108,18 @@ BIOCAUSE_ARTICLE_SPLITS: Dict[str, int] = {
     "test": 4,
 }
 
-# BioCause Candidate Split Counts and Positive Counts (from candidate generation)
+# BioCause Candidate Split Counts and Positive Counts (from candidate generation audit)
 BIOCAUSE_CANDIDATE_COUNTS: Dict[str, Dict[str, int]] = {
     "train": {"total": 10086, "positive": 621, "negative": 9465},
     "validation": {"total": 1914, "positive": 131, "negative": 1783},
     "test": {"total": 1408, "positive": 100, "negative": 1308},
+}
+
+# BioCause Model-Eligible Split Counts (source-verified, excluding invalid reconstructions)
+BIOCAUSE_MODEL_ELIGIBLE_COUNTS: Dict[str, Dict[str, int]] = {
+    "train": {"total": 9908, "positive": 620, "negative": 9288},
+    "validation": {"total": 1884, "positive": 131, "negative": 1753},
+    "test": {"total": 1394, "positive": 100, "negative": 1294},
 }
 
 # Primary Phase 1 AML Baseline Input for Hybrid Integration
