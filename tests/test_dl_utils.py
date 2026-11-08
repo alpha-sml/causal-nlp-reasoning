@@ -1241,15 +1241,17 @@ class TestConstants(unittest.TestCase):
 
     def test_biocause_model_eligible_counts(self):
         train = dl_utils.BIOCAUSE_MODEL_ELIGIBLE_COUNTS["train"]
-        self.assertEqual(train["total"], 9908)
-        self.assertEqual(train["positive"], 620)
-        self.assertEqual(train["negative"], 9288)
+        self.assertEqual(train["total"], 9928)
+        self.assertEqual(train["positive"], 621)
+        self.assertEqual(train["negative"], 9307)
         val = dl_utils.BIOCAUSE_MODEL_ELIGIBLE_COUNTS["validation"]
         self.assertEqual(val["total"], 1884)
         self.assertEqual(val["positive"], 131)
+        self.assertEqual(val["negative"], 1753)
         test = dl_utils.BIOCAUSE_MODEL_ELIGIBLE_COUNTS["test"]
         self.assertEqual(test["total"], 1394)
         self.assertEqual(test["positive"], 100)
+        self.assertEqual(test["negative"], 1294)
 
 
 # ===========================================================================
@@ -1449,8 +1451,8 @@ class TestBioCauseSourceReconstructionAndEligibility(unittest.TestCase):
         self.assertIn("[E2]", cropped)
 
     def test_9_training_dynamic_class_weight_uses_only_model_eligible_candidates(self):
-        weight = dl_utils.calculate_dynamic_class_weight(n_negative=9288, n_positive=620)
-        self.assertAlmostEqual(weight, 14.9806, places=3)
+        weight = dl_utils.calculate_dynamic_class_weight(n_negative=9307, n_positive=621)
+        self.assertAlmostEqual(weight, 14.9871, places=3)
         self.assertNotEqual(weight, 9465 / 621)
 
     def test_10_diagnostics_export_contains_invalid_candidate_ids_and_reasons(self):
@@ -1466,6 +1468,78 @@ class TestBioCauseSourceReconstructionAndEligibility(unittest.TestCase):
             self.assertIn("cand_002", readback["candidate_id"].values)
             self.assertIn("cand_003", readback["candidate_id"].values)
             self.assertIn("diagnostic", readback.columns)
+
+    def test_11_actual_tokenizer_based_cropping_and_token_limits(self):
+        """Focused test: Reconstruct BioCause candidate with PubMedBERT tokenizer, verifying <= 384 tokens with special tokens."""
+        tokenizer = dl_utils.prepare_tokenizer_and_inputs(
+            dl_utils.PUBMEDBERT_CHECKPOINT,
+            additional_special_tokens=dl_utils.ENTITY_MARKERS,
+        )
+        long_prefix = "Extensive biomedical literature reports that phosphorylation cascades regulate transcription. " * 30
+        long_suffix = " Subsequent downstream metabolic analyses confirm these regulatory pathways in vivo. " * 30
+        section = f"{long_prefix}IL-6 expression stimulates vascular permeability in diseased microenvironments.{long_suffix}"
+
+        arg1_text = "IL-6"
+        arg2_text = "vascular permeability"
+        arg1_start = section.index(arg1_text)
+        arg1_end = arg1_start + len(arg1_text)
+        arg2_start = section.index(arg2_text)
+        arg2_end = arg2_start + len(arg2_text)
+
+        reconstructed = dl_utils.reconstruct_biocause_context_with_markers(
+            section_text=section,
+            arg1_start=arg1_start,
+            arg1_end=arg1_end,
+            arg2_start=arg2_start,
+            arg2_end=arg2_end,
+            arg1_text=arg1_text,
+            arg2_text=arg2_text,
+            tokenizer=tokenizer,
+            max_length=384,
+            candidate_id="test_cand_tok_001",
+        )
+
+        # 1. Enforces <= 384 tokens with special tokens
+        encoded_ids = tokenizer.encode(reconstructed, add_special_tokens=True)
+        self.assertLessEqual(len(encoded_ids), 384)
+
+        # 2. Preserves all four entity markers
+        for marker in ["[E1]", "[/E1]", "[E2]", "[/E2]"]:
+            self.assertIn(marker, reconstructed)
+
+        # 3. Preserves complete argument spans
+        self.assertIn(arg1_text, reconstructed)
+        self.assertIn(arg2_text, reconstructed)
+
+    def test_12_oversized_candidate_fails_token_budget_without_fallback(self):
+        """Focused test: Oversized entities that cannot fit raise ValueError and do NOT produce fallback text."""
+        tokenizer = dl_utils.prepare_tokenizer_and_inputs(
+            dl_utils.PUBMEDBERT_CHECKPOINT,
+            additional_special_tokens=dl_utils.ENTITY_MARKERS,
+        )
+        huge_entity1 = "kinase protein domain phosphorylation locus variant " * 50
+        huge_entity2 = "transcriptional activation signaling cascade inhibitor " * 50
+        section = f"Beginning of section. {huge_entity1} mediates {huge_entity2} in cells."
+
+        arg1_start = section.index(huge_entity1)
+        arg1_end = arg1_start + len(huge_entity1)
+        arg2_start = section.index(huge_entity2)
+        arg2_end = arg2_start + len(huge_entity2)
+
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.reconstruct_biocause_context_with_markers(
+                section_text=section,
+                arg1_start=arg1_start,
+                arg1_end=arg1_end,
+                arg2_start=arg2_start,
+                arg2_end=arg2_end,
+                arg1_text=huge_entity1,
+                arg2_text=huge_entity2,
+                tokenizer=tokenizer,
+                max_length=50,  # Far too small to fit the huge entities + markers
+                candidate_id="cand_oversized_999",
+            )
+        self.assertIn("cand_oversized_999", str(ctx.exception))
 
 
 if __name__ == "__main__":

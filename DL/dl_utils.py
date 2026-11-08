@@ -117,7 +117,7 @@ BIOCAUSE_CANDIDATE_COUNTS: Dict[str, Dict[str, int]] = {
 
 # BioCause Model-Eligible Split Counts (source-verified, excluding invalid reconstructions)
 BIOCAUSE_MODEL_ELIGIBLE_COUNTS: Dict[str, Dict[str, int]] = {
-    "train": {"total": 9908, "positive": 620, "negative": 9288},
+    "train": {"total": 9928, "positive": 621, "negative": 9307},
     "validation": {"total": 1884, "positive": 131, "negative": 1753},
     "test": {"total": 1394, "positive": 100, "negative": 1294},
 }
@@ -843,6 +843,15 @@ def crop_context_around_entities(
             f"preserving complete entity spans and markers."
         )
 
+    # If tokenizer with encode is available, enforce total tokens with special tokens <= max_tokens
+    if tokenizer is not None and hasattr(tokenizer, "encode"):
+        full_tokens = len(tokenizer.encode(result, add_special_tokens=True))
+        if full_tokens > max_tokens:
+            raise ValueError(
+                f"Candidate {candidate_id or 'unknown'}: Cropped sequence with special tokens has "
+                f"{full_tokens} tokens which exceeds max_tokens={max_tokens}."
+            )
+
     return result
 
 
@@ -1073,6 +1082,7 @@ def prepare_tokenizer_and_inputs(
     checkpoint_name: str,
     max_length: int = 512,
     additional_special_tokens: Optional[List[str]] = None,
+    **kwargs: Any,
 ) -> Any:
     """Initialize tokenizer and configure special tokens (such as argument markers).
 
@@ -1080,6 +1090,7 @@ def prepare_tokenizer_and_inputs(
         checkpoint_name: HuggingFace model checkpoint (e.g., PUBMEDBERT_CHECKPOINT).
         max_length: Maximum sequence length for truncation/padding.
         additional_special_tokens: Optional list of special tokens to register.
+        **kwargs: Additional keyword arguments passed to AutoTokenizer.from_pretrained.
 
     Returns:
         Configured AutoTokenizer instance.
@@ -1091,7 +1102,10 @@ def prepare_tokenizer_and_inputs(
     """
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_name)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(checkpoint_name, local_files_only=True, **kwargs)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(checkpoint_name, **kwargs)
     tokenizer.model_max_length = max_length
 
     if additional_special_tokens:
