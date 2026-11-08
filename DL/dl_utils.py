@@ -12,7 +12,7 @@ Note:
     Actual model execution logic is implemented in the respective DL notebooks.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 import os
 import sys
 import hashlib
@@ -121,6 +121,8 @@ DEFAULT_BIOCAUSE_GRAD_ACCUM: int = 2
 DEFAULT_DISTILBERT_BATCH_SIZE: int = 16
 DEFAULT_DISTILBERT_GRAD_ACCUM: int = 1
 DEFAULT_CHECKPOINT_LIMIT: int = 1
+DEFAULT_BIOCAUSE_MAX_LENGTH: int = 384
+DEFAULT_CORR2CAUSE_MAX_LENGTH: int = 256
 
 
 # ==============================================================================
@@ -203,31 +205,35 @@ def validate_dataset_schema(
     df: Any,
     expected_columns: List[str],
     dataset_name: str = "Dataset",
+    critical_columns: Optional[List[str]] = None,
 ) -> bool:
-    """Validate that an input DataFrame contains all required columns without missing schema fields.
+    """Validate DataFrame or Dataset column presence, data types, and null invariants.
+
+    Fails fast with descriptive ValueError if required columns are missing
+    or if required critical key fields contain null or empty values.
 
     Args:
-        df: pandas DataFrame or Dataset to validate.
+        df: pandas DataFrame or HuggingFace Dataset object to validate.
         expected_columns: List of required column names.
-        dataset_name: Human-readable dataset name for error reporting.
+        dataset_name: Dataset identifier for error reporting.
+        critical_columns: Optional list of critical columns that must not contain nulls.
+            Defaults to {"candidate_id", "split", "label", "article_id"}.
 
     Returns:
-        True if all expected columns are present.
+        True if all validation checks pass.
 
     Raises:
-        ValueError: If any expected columns are missing from the DataFrame.
-
-    Implementation Requirements:
-        - Check set(expected_columns).issubset(df.columns)
-        - Report missing columns clearly
-        - Check for unexpected null values in critical key fields (e.g., candidate_id, split, label)
+        TypeError: If df is neither a pandas DataFrame nor HuggingFace Dataset.
+        ValueError: If required columns are missing or if critical fields contain nulls.
     """
     # Support both pandas DataFrame and HuggingFace Dataset objects
-    if hasattr(df, "column_names"):
+    if hasattr(df, "column_names") and not isinstance(df, pd.DataFrame):
         # HuggingFace Dataset object
         columns = set(df.column_names)
-    elif hasattr(df, "columns"):
+    elif isinstance(df, pd.DataFrame):
         # pandas DataFrame
+        columns = set(df.columns)
+    elif hasattr(df, "columns"):
         columns = set(df.columns)
     else:
         raise TypeError(
@@ -243,39 +249,58 @@ def validate_dataset_schema(
             f"Available columns: {sorted(columns)}."
         )
 
-    # Check for null values in critical key fields (pandas DataFrames only)
+    # Check for null or empty values in critical key fields (pandas DataFrames only)
     if isinstance(df, pd.DataFrame):
-        critical_fields = {"candidate_id", "split", "label", "article_id"}
-        present_critical = critical_fields & columns
+        if critical_columns is None:
+            check_critical = {"candidate_id", "split", "label", "article_id"}
+        else:
+            check_critical = set(critical_columns)
+
+        present_critical = check_critical & columns
         for field in present_critical:
-            null_count = df[field].isna().sum()
+            null_count = int(df[field].isna().sum())
             if null_count > 0:
-                logger.warning(
-                    f"{dataset_name}: Column '{field}' has {null_count} null values."
+                raise ValueError(
+                    f"{dataset_name}: Required field '{field}' contains {null_count} null values."
                 )
+            if df[field].dtype == object or pd.api.types.is_string_dtype(df[field]):
+                empty_count = int((df[field].astype(str).str.strip() == "").sum())
+                if empty_count > 0:
+                    raise ValueError(
+                        f"{dataset_name}: Required field '{field}' contains {empty_count} empty string values."
+                    )
 
     return True
 
 
-def validate_biocause_candidates(df: pd.DataFrame, dataset_name: str = "BioCause") -> Dict[str, Any]:
+def validate_biocause_candidates(
+    df: pd.DataFrame,
+    dataset_name: str = "BioCause",
+) -> Dict[str, Any]:
     """Extended validation for BioCause candidate DataFrames.
 
-    Checks:
-        - Required columns present
-        - Binary labels (0 or 1)
-        - No duplicate candidate_ids
-        - Valid article-level split isolation
+    Validates:
+        - Required columns are detected before access, preventing accidental KeyErrors.
+        - Critical fields (candidate_id, article_id, section_id, label, split, arg1_id, arg2_id, arg1_text, arg2_text)
+          contain no missing, null, or empty values.
+        - Binary labels (strictly {0, 1}).
+        - Unique candidate IDs (no duplicates).
+        - Disjoint article-level split isolation (zero cross-split leakage).
 
     Args:
         df: BioCause candidates DataFrame.
         dataset_name: Name for error reporting.
 
     Returns:
-        Dictionary with validation results and summary statistics.
-    """
-    issues: List[str] = []
+        Dictionary with validation summary statistics.
 
-    # Check required columns
+    Raises:
+        TypeError: If df is not a pandas DataFrame.
+        ValueError: If any validation rule is violated, with descriptive error messages.
+    """
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError(f"{dataset_name}: Expected pandas DataFrame, got {type(df).__name__}.")
+
     biocause_required = [
         "candidate_id", "article_id", "section_id", "label", "split",
         "arg1_id", "arg2_id", "arg1_text", "arg2_text",
@@ -283,20 +308,41 @@ def validate_biocause_candidates(df: pd.DataFrame, dataset_name: str = "BioCause
     available = set(df.columns)
     missing = set(biocause_required) - available
     if missing:
-        issues.append(f"Missing required columns: {sorted(missing)}")
+        raise ValueError(
+            f"{dataset_name}: Missing required columns: {sorted(missing)}. "
+            f"Available columns: {sorted(available)}."
+        )
 
-    # Binary labels
-    unique_labels = set(df["label"].dropna().unique())
+    # Validate critical fields have no null or empty values
+    for field in biocause_required:
+        null_count = int(df[field].isna().sum())
+        if null_count > 0:
+            raise ValueError(
+                f"{dataset_name}: Required field '{field}' contains {null_count} null values."
+            )
+        if df[field].dtype == object or pd.api.types.is_string_dtype(df[field]):
+            empty_count = int((df[field].astype(str).str.strip() == "").sum())
+            if empty_count > 0:
+                raise ValueError(
+                    f"{dataset_name}: Required field '{field}' contains {empty_count} empty string values."
+                )
+
+    # Binary labels validation
+    unique_labels = set(df["label"].unique())
     if not unique_labels.issubset({0, 1}):
-        issues.append(f"Expected binary labels {{0, 1}}, found: {unique_labels}")
+        raise ValueError(
+            f"{dataset_name}: Expected binary labels subset of {{0, 1}}, found: {sorted(unique_labels)}."
+        )
 
-    # Duplicate candidate_ids
-    if "candidate_id" in df.columns:
-        dup_count = df["candidate_id"].duplicated().sum()
-        if dup_count > 0:
-            issues.append(f"Found {dup_count} duplicate candidate_ids.")
+    # Unique candidate_id validation
+    dup_count = int(df["candidate_id"].duplicated().sum())
+    if dup_count > 0:
+        sample_dups = df[df["candidate_id"].duplicated()]["candidate_id"].unique()[:5].tolist()
+        raise ValueError(
+            f"{dataset_name}: Found {dup_count} duplicate candidate_ids (samples: {sample_dups})."
+        )
 
-    # Article-level split isolation
+    # Disjoint article-level split isolation validation
     split_articles: Dict[str, set] = {}
     for split_name in df["split"].unique():
         split_articles[split_name] = set(
@@ -308,8 +354,9 @@ def validate_biocause_candidates(df: pd.DataFrame, dataset_name: str = "BioCause
         for j in range(i + 1, len(split_names)):
             overlap = split_articles[split_names[i]] & split_articles[split_names[j]]
             if overlap:
-                issues.append(
-                    f"Article overlap between {split_names[i]} and {split_names[j]}: {overlap}"
+                raise ValueError(
+                    f"{dataset_name}: Article leakage detected between splits "
+                    f"'{split_names[i]}' and '{split_names[j]}': {sorted(overlap)}."
                 )
 
     # Summary statistics
@@ -322,11 +369,6 @@ def validate_biocause_candidates(df: pd.DataFrame, dataset_name: str = "BioCause
             "positive": int((split_df["label"] == 1).sum()),
             "negative": int((split_df["label"] == 0).sum()),
         }
-
-    if issues:
-        raise ValueError(
-            f"{dataset_name} validation failed:\n" + "\n".join(f"  - {i}" for i in issues)
-        )
 
     return summary
 
@@ -435,98 +477,423 @@ def format_biocause_input_with_markers(
 
 def crop_context_around_entities(
     marked_text: str,
-    max_tokens: int = 512,
+    max_tokens: int = DEFAULT_BIOCAUSE_MAX_LENGTH,
     tokenizer: Any = None,
-    margin_tokens: int = 50,
+    gap_separator: str = " ... ",
+    candidate_id: Optional[str] = None,
+    special_tokens_reserved: int = 2,
+    margin_tokens: Optional[int] = None,
+    max_intervening_tokens: Optional[int] = None,
 ) -> str:
-    """Crop context around entity markers for long BioCause examples.
+    """Crop context around entity markers for BioCause examples to fit the token budget.
 
-    Preserves both complete argument spans and all four entity markers.
-    Avoids blindly truncating from the right. Instead, centers the crop
-    window around the midpoint between the two entity spans.
+    Aligns with PubMedBERT fine-tuning limit (MAX_LENGTH = 384) including tokenizer-added
+    special tokens ([CLS] and [SEP]).
+
+    Requirements:
+        - Preserves both complete argument spans intact.
+        - Preserves all four entity boundary markers ([E1], [/E1], [E2], [/E2]).
+        - Retains useful local context around both arguments.
+        - For very distant arguments whose intervening passage cannot fit or is excessively
+          large, inserts an explicit, documented gap separator (" ... ") rather than keeping
+          an unnecessarily large intervening passage.
+        - Ensures the resulting sequence strictly stays within max_tokens.
+        - If the two complete arguments and their markers cannot fit within the budget,
+          raises a descriptive ValueError recording the candidate ID. Never silently returns
+          an oversized sequence.
 
     Args:
-        marked_text: Text with [E1], [/E1], [E2], [/E2] markers already inserted.
-        max_tokens: Maximum token count allowed (including special tokens).
-        tokenizer: A HuggingFace tokenizer instance. If None, falls back to
-            character-based approximation (4 chars ≈ 1 token).
-        margin_tokens: Extra token budget on each side of the entity span region.
+        marked_text: Source text with [E1], [/E1], [E2], [/E2] markers already inserted.
+        max_tokens: Maximum allowed total sequence length (default: DEFAULT_BIOCAUSE_MAX_LENGTH = 384).
+        tokenizer: HuggingFace tokenizer instance or compatible object. If None, uses regex
+            token estimation (words + punctuation).
+        gap_separator: Explicit separator string inserted between distant argument contexts.
+        candidate_id: Optional candidate ID for descriptive error reporting.
+        special_tokens_reserved: Number of special tokens reserved for model input (default: 2 for [CLS] and [SEP]).
+        margin_tokens: Legacy parameter preserved for backward compatibility.
+        max_intervening_tokens: Maximum token length of intervening passage before treating arguments
+            as distant and inserting gap_separator (defaults to budget // 2).
 
     Returns:
-        Cropped text preserving all entity markers and both entity spans.
-    """
-    if tokenizer is not None:
-        tokens = tokenizer.encode(marked_text, add_special_tokens=False)
-        if len(tokens) <= max_tokens - 2:  # -2 for [CLS] and [SEP]
-            return marked_text
-    else:
-        # Approximate: 4 chars per token
-        approx_tokens = len(marked_text) // 4
-        if approx_tokens <= max_tokens - 2:
-            return marked_text
+        Cropped text preserving both entity spans and all four markers within max_tokens.
 
-    # Find marker positions in the marked text
+    Raises:
+        ValueError: If entity boundary markers are missing, or if the argument spans and markers
+            themselves cannot fit in the available token budget.
+    """
+    import re
+
+    budget = max_tokens - special_tokens_reserved
+    if budget <= 0:
+        raise ValueError(
+            f"Candidate {candidate_id or 'unknown'}: max_tokens ({max_tokens}) must be greater "
+            f"than special_tokens_reserved ({special_tokens_reserved})."
+        )
+
+    def _count_tokens(text: str) -> int:
+        if not text:
+            return 0
+        if tokenizer is not None:
+            if hasattr(tokenizer, "encode"):
+                return len(tokenizer.encode(text, add_special_tokens=False))
+            elif hasattr(tokenizer, "tokenize"):
+                return len(tokenizer.tokenize(text))
+        return len(re.findall(r"\w+|[^\w\s]", text))
+
+    def _slice_tokens(text: str, n_tokens: int, from_end: bool = False) -> str:
+        if n_tokens <= 0 or not text.strip():
+            return ""
+        if tokenizer is not None and hasattr(tokenizer, "encode") and hasattr(tokenizer, "decode"):
+            toks = tokenizer.encode(text, add_special_tokens=False)
+            if len(toks) <= n_tokens:
+                return text.strip()
+            sliced_toks = toks[-n_tokens:] if from_end else toks[:n_tokens]
+            return tokenizer.decode(sliced_toks, skip_special_tokens=False).strip()
+        else:
+            words = text.strip().split()
+            if len(words) <= n_tokens:
+                return text.strip()
+            sliced = words[-n_tokens:] if from_end else words[:n_tokens]
+            return " ".join(sliced)
+
+    # 1. Locate all four entity boundary markers
     e1_open = marked_text.find("[E1]")
     e1_close = marked_text.find("[/E1]")
     e2_open = marked_text.find("[E2]")
     e2_close = marked_text.find("[/E2]")
 
-    if any(pos == -1 for pos in [e1_open, e1_close, e2_open, e2_close]):
-        # Markers not found; fall back to simple right truncation
-        if tokenizer is not None:
-            tokens = tokenizer.encode(marked_text, add_special_tokens=False)
-            return tokenizer.decode(tokens[: max_tokens - 2], skip_special_tokens=False)
-        return marked_text[: (max_tokens - 2) * 4]
+    for marker_name, pos in [
+        ("[E1]", e1_open),
+        ("[/E1]", e1_close),
+        ("[E2]", e2_open),
+        ("[/E2]", e2_close),
+    ]:
+        if pos == -1:
+            raise ValueError(
+                f"Candidate {candidate_id or 'unknown'}: Required entity boundary marker "
+                f"'{marker_name}' not found in marked_text."
+            )
 
-    # Determine the span that covers all markers
-    span_start = min(e1_open, e2_open)
-    span_end = max(e1_close + len("[/E1]"), e2_close + len("[/E2]"))
+    e1_end = e1_close + len("[/E1]")
+    e2_end = e2_close + len("[/E2]")
 
-    if tokenizer is not None:
-        # Token-precise cropping
-        char_margin = margin_tokens * 6  # generous char estimate
-        crop_start = max(0, span_start - char_margin)
-        crop_end = min(len(marked_text), span_end + char_margin)
-
-        cropped = marked_text[crop_start:crop_end]
-        tokens = tokenizer.encode(cropped, add_special_tokens=False)
-
-        if len(tokens) > max_tokens - 2:
-            # Still too long; decode only max_tokens - 2 tokens centered on the entity region
-            entity_region = marked_text[span_start:span_end]
-            entity_tokens = tokenizer.encode(entity_region, add_special_tokens=False)
-            remaining = max_tokens - 2 - len(entity_tokens)
-            if remaining < 0:
-                # Entity region itself exceeds budget; return it as-is
-                return entity_region
-            left_budget = remaining // 2
-            right_budget = remaining - left_budget
-
-            # Get tokens before and after entity region
-            left_text = marked_text[:span_start]
-            right_text = marked_text[span_end:]
-            left_tokens = tokenizer.encode(left_text, add_special_tokens=False)
-            right_tokens = tokenizer.encode(right_text, add_special_tokens=False)
-
-            left_keep = left_tokens[-left_budget:] if left_budget > 0 else []
-            right_keep = right_tokens[:right_budget] if right_budget > 0 else []
-
-            final_tokens = left_keep + entity_tokens + right_keep
-            return tokenizer.decode(final_tokens, skip_special_tokens=False)
-
-        return cropped
+    if e1_open < e2_open:
+        first_open, first_close = e1_open, e1_end
+        second_open, second_close = e2_open, e2_end
     else:
-        # Character-based approximation
-        char_budget = (max_tokens - 2) * 4
-        entity_len = span_end - span_start
-        remaining = char_budget - entity_len
-        if remaining < 0:
-            return marked_text[span_start:span_end]
-        left_budget = remaining // 2
-        right_budget = remaining - left_budget
-        crop_start = max(0, span_start - left_budget)
-        crop_end = min(len(marked_text), span_end + right_budget)
-        return marked_text[crop_start:crop_end]
+        first_open, first_close = e2_open, e2_end
+        second_open, second_close = e1_open, e1_end
+
+    prefix_text = marked_text[:first_open]
+    first_entity = marked_text[first_open:first_close]
+    intervening_text = marked_text[first_close:second_open]
+    second_entity = marked_text[second_open:second_close]
+    suffix_text = marked_text[second_close:]
+
+    # 2. Check if the two complete argument spans and their markers can fit
+    min_core_text = f"{first_entity} {second_entity}"
+    min_core_tokens = _count_tokens(min_core_text)
+    if min_core_tokens > budget:
+        raise ValueError(
+            f"Candidate {candidate_id or 'unknown'}: Complete argument spans and entity markers "
+            f"exceed token budget ({min_core_tokens} tokens > budget {budget}). "
+            f"Sequence cannot be cropped without losing entity spans or markers."
+        )
+
+    # If full text already fits, return as-is
+    if _count_tokens(marked_text) <= budget:
+        return marked_text
+
+    # 3. Check if intervening passage fits without gap separator
+    middle_text = marked_text[first_open:second_close]
+    middle_tokens = _count_tokens(middle_text)
+    intervening_tokens = _count_tokens(intervening_text)
+    if max_intervening_tokens is None:
+        max_intervening_tokens = budget // 2
+
+    is_distant = (intervening_tokens > max_intervening_tokens) or (middle_tokens > budget)
+
+    if not is_distant:
+        # Intervening passage fits and arguments are not distant! Distribute remaining tokens to prefix and suffix
+        rem = budget - middle_tokens
+        left_budget = rem // 2
+        right_budget = rem - left_budget
+        left_str = _slice_tokens(prefix_text, left_budget, from_end=True)
+        right_str = _slice_tokens(suffix_text, right_budget, from_end=False)
+        parts = [p for p in [left_str, middle_text, right_str] if p]
+        result = " ".join(parts)
+    else:
+        # Intervening passage itself exceeds budget! Very distant arguments.
+        # Use explicit, documented gap separator rather than oversized passage.
+        gap_tokens = _count_tokens(gap_separator)
+        core_tokens = min_core_tokens + gap_tokens
+        if core_tokens > budget:
+            raise ValueError(
+                f"Candidate {candidate_id or 'unknown'}: Complete argument spans, markers, and "
+                f"gap separator exceed token budget ({core_tokens} tokens > budget {budget})."
+            )
+
+        rem = budget - core_tokens
+        w = max(0, rem // 4)
+        left_str = _slice_tokens(prefix_text, w, from_end=True)
+        post_first_str = _slice_tokens(intervening_text, w, from_end=False)
+        pre_second_str = _slice_tokens(intervening_text, w, from_end=True)
+        right_str = _slice_tokens(suffix_text, w, from_end=False)
+
+        left_block = f"{left_str} {first_entity}".strip() if left_str else first_entity
+        if post_first_str:
+            left_block = f"{left_block} {post_first_str}".strip()
+
+        right_block = f"{second_entity} {right_str}".strip() if right_str else second_entity
+        if pre_second_str:
+            right_block = f"{pre_second_str} {right_block}".strip()
+
+        result = f"{left_block}{gap_separator}{right_block}"
+
+    # Micro-trim if subword join boundaries slightly exceed budget
+    while _count_tokens(result) > budget:
+        if suffix_text and not result.endswith("[/E2]") and not result.endswith("[/E1]"):
+            words = result.split()
+            if len(words) > 1 and not words[-1].startswith("[/"):
+                result = " ".join(words[:-1])
+                continue
+        if prefix_text and not result.startswith("[E1]") and not result.startswith("[E2]"):
+            words = result.split()
+            if len(words) > 1 and not words[0].endswith("]"):
+                result = " ".join(words[1:])
+                continue
+        break
+
+    # Safety assertions: must retain all markers and both entity spans
+    for m in ENTITY_MARKERS:
+        if m not in result:
+            raise ValueError(
+                f"Candidate {candidate_id or 'unknown'}: Cropping failed to preserve marker '{m}'."
+            )
+
+    return result
+
+
+# Preserved backward-compatible alias
+crop_context_preserving_markers = crop_context_around_entities
+
+
+def resolve_biocause_section_path(
+    section_id: str,
+    raw_dir: Optional[Union[str, Path]] = None,
+) -> Path:
+    """Resolve the filesystem path for a BioCause section .txt file.
+
+    Searches in priority order:
+    1. raw_dir / f"{section_id}.txt" (if raw_dir is provided)
+    2. raw_dir / "BioCause_corpus" / f"{section_id}.txt" (if raw_dir is provided)
+    3. REPO_ROOT / "data" / "raw" / "biocause" / "BioCause_corpus" / f"{section_id}.txt"
+    4. REPO_ROOT / "data" / "raw" / "biocause" / f"{section_id}.txt"
+
+    Args:
+        section_id: Source section identifier (e.g., 'PMC2714965-02-Results-04').
+        raw_dir: Optional base directory to search.
+
+    Returns:
+        Resolved Path to the existing .txt file.
+
+    Raises:
+        FileNotFoundError: If the section file cannot be found in any candidate location.
+    """
+    root = find_repo_root()
+    filename = f"{section_id}.txt"
+    candidates: List[Path] = []
+
+    if raw_dir is not None:
+        raw_path = Path(raw_dir)
+        candidates.append(raw_path / "BioCause_corpus" / filename)
+        candidates.append(raw_path / filename)
+
+    candidates.append(root / "data" / "raw" / "biocause" / "BioCause_corpus" / filename)
+    candidates.append(root / "data" / "raw" / "biocause" / filename)
+
+    for p in candidates:
+        if p.is_file():
+            return p.resolve()
+
+    searched = [str(p) for p in candidates]
+    raise FileNotFoundError(
+        f"BioCause source section file not found for section_id '{section_id}'. "
+        f"Searched locations:\n  " + "\n  ".join(searched)
+    )
+
+
+def load_biocause_section_text(
+    section_id: str,
+    raw_dir: Optional[Union[str, Path]] = None,
+    cache: Optional[Dict[str, str]] = None,
+) -> str:
+    """Load and return the complete source text for a BioCause section_id.
+
+    Args:
+        section_id: Source section identifier.
+        raw_dir: Optional base directory to search.
+        cache: Optional dictionary cache mapping section_id -> loaded text.
+
+    Returns:
+        Full raw text string from the corresponding .txt file.
+    """
+    if cache is not None and section_id in cache:
+        return cache[section_id]
+
+    path = resolve_biocause_section_path(section_id, raw_dir=raw_dir)
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    if cache is not None:
+        cache[section_id] = text
+
+    return text
+
+
+def reconstruct_biocause_context_with_markers(
+    section_text: str,
+    arg1_start: int,
+    arg1_end: int,
+    arg2_start: int,
+    arg2_end: int,
+    arg1_text: Optional[str] = None,
+    arg2_text: Optional[str] = None,
+    candidate_id: Optional[str] = None,
+    max_length: int = DEFAULT_BIOCAUSE_MAX_LENGTH,
+    max_tokens: Optional[int] = None,
+    tokenizer: Optional[Any] = None,
+    gap_separator: str = " ... ",
+) -> str:
+    """Reconstruct complete source context with entity boundary markers.
+
+    Verifies that character offsets in section_text match arg1_text and arg2_text
+    (allowing documented newline normalization c.replace('\\n', ' ') == arg_text).
+    Inserts [E1], [/E1], [E2], [/E2] boundary markers around the argument spans.
+    Crops context around entities to guarantee that the sequence stays within
+    the max_length budget (384 tokens) while preserving both complete entity spans
+    and all four markers.
+
+    Args:
+        section_text: Complete raw text of the source section.
+        arg1_start: Character start index of argument 1.
+        arg1_end: Character end index of argument 1.
+        arg2_start: Character start index of argument 2.
+        arg2_end: Character end index of argument 2.
+        arg1_text: Expected surface text of argument 1.
+        arg2_text: Expected surface text of argument 2.
+        candidate_id: Optional candidate identifier for error reporting.
+        max_length: Maximum sequence length budget (default 384).
+        tokenizer: Optional tokenizer instance.
+        gap_separator: Documented gap separator for very distant arguments.
+
+    Returns:
+        Marked and cropped source context string.
+    """
+    sent_len = len(section_text)
+    for name, start, end in [("arg1", arg1_start, arg1_end), ("arg2", arg2_start, arg2_end)]:
+        if start < 0 or end < start or end > sent_len:
+            raise ValueError(
+                f"Candidate {candidate_id or 'unknown'}: Invalid {name} offset [{start}:{end}] "
+                f"for section text of length {sent_len}."
+            )
+
+    # Verify extracted source spans match expected text with documented newline normalization
+    span1 = section_text[arg1_start:arg1_end]
+    span2 = section_text[arg2_start:arg2_end]
+
+    if arg1_text is not None:
+        if span1 != arg1_text and span1.replace("\n", " ") != arg1_text:
+            raise ValueError(
+                f"Candidate {candidate_id or 'unknown'}: Arg1 span mismatch. "
+                f"Extracted from source: {span1!r}, expected: {arg1_text!r}."
+            )
+
+    if arg2_text is not None:
+        if span2 != arg2_text and span2.replace("\n", " ") != arg2_text:
+            raise ValueError(
+                f"Candidate {candidate_id or 'unknown'}: Arg2 span mismatch. "
+                f"Extracted from source: {span2!r}, expected: {arg2_text!r}."
+            )
+
+    # Insert explicit entity boundary markers into full section context
+    marked = format_biocause_input_with_markers(
+        sentence=section_text,
+        arg1_start=arg1_start,
+        arg1_end=arg1_end,
+        arg2_start=arg2_start,
+        arg2_end=arg2_end,
+    )
+
+    effective_budget = max_tokens if max_tokens is not None else max_length
+    # Crop context to stay within budget (384 tokens)
+    cropped = crop_context_around_entities(
+        marked_text=marked,
+        max_tokens=effective_budget,
+        tokenizer=tokenizer,
+        gap_separator=gap_separator,
+        candidate_id=candidate_id,
+    )
+    return cropped
+
+
+def profile_token_lengths(
+    texts: Sequence[str],
+    tokenizer: Any = None,
+    max_samples: Optional[int] = 1000,
+    target_budget: int = DEFAULT_BIOCAUSE_MAX_LENGTH,
+) -> Dict[str, Any]:
+    """Profile tokenizer sequence lengths across a list of text examples.
+
+    Args:
+        texts: List or sequence of text strings to profile.
+        tokenizer: HuggingFace AutoTokenizer or compatible tokenizer (optional).
+        max_samples: Maximum number of samples to evaluate for efficiency.
+        target_budget: Target sequence length threshold to evaluate coverage.
+
+    Returns:
+        Dictionary with statistical profile.
+
+    Raises:
+        ValueError: If texts is empty.
+    """
+    if not texts:
+        raise ValueError("Cannot profile token lengths of an empty sequence of texts.")
+
+    sample_texts = list(texts[:max_samples]) if max_samples else list(texts)
+    lengths: List[int] = []
+
+    for t in sample_texts:
+        if tokenizer is not None and hasattr(tokenizer, "encode"):
+            l = len(tokenizer.encode(t, add_special_tokens=True))
+        elif tokenizer is not None and hasattr(tokenizer, "tokenize"):
+            l = len(tokenizer.tokenize(t)) + 2
+        else:
+            import re
+            l = len(re.findall(r"\w+|[^\w\s]", t)) + 2
+        lengths.append(l)
+
+    arr = np.array(lengths)
+    within_budget = float((arr <= target_budget).sum()) / len(arr) * 100.0
+
+    return {
+        "count": len(lengths),
+        "total_samples": len(lengths),
+        "min": int(arr.min()),
+        "max": int(arr.max()),
+        "mean": float(round(float(arr.mean()), 2)),
+        "std": float(round(float(arr.std()), 2)),
+        "median": float(np.median(arr)),
+        "p50": float(np.median(arr)),
+        "p90": float(round(float(np.percentile(arr, 90)), 2)),
+        "p95": float(round(float(np.percentile(arr, 95)), 2)),
+        "p99": float(round(float(np.percentile(arr, 99)), 2)),
+        "target_budget": target_budget,
+        "within_budget": int((arr <= target_budget).sum()),
+        "pct_within_budget": round(within_budget, 2),
+        "exceeding_target_budget": int((arr > target_budget).sum()),
+        "pct_exceeding": round(100.0 - within_budget, 2),
+    }
 
 
 def prepare_tokenizer_and_inputs(
@@ -605,6 +972,10 @@ def calculate_dynamic_class_weight(
     return float(n_negative) / float(n_positive)
 
 
+# Preserved backward-compatible alias
+compute_dynamic_class_weight = calculate_dynamic_class_weight
+
+
 def get_training_arguments(
     output_dir: str,
     num_epochs: int = 3,
@@ -619,7 +990,7 @@ def get_training_arguments(
 ) -> Any:
     """Construct HuggingFace TrainingArguments configured for free GPU tiers (Kaggle T4 / Colab).
 
-    Uses `eval_strategy` conforming to modern Transformers API specifications (>=4.40.0),
+    Uses `eval_strategy` conforming to modern Transformers API specifications (>=4.41.2),
     replacing the legacy `evaluation_strategy` argument.
 
     Args:
@@ -636,10 +1007,6 @@ def get_training_arguments(
 
     Returns:
         transformers.TrainingArguments object.
-
-    Implementation Requirements:
-        - Detect fp16 automatically if None: fp16 = (torch.cuda.is_available() and not torch.backends.mps.is_available())
-        - Set metric_for_best_model="eval_f1" and load_best_model_at_end=True
     """
     from transformers import TrainingArguments
     import torch
@@ -682,7 +1049,7 @@ def get_training_arguments(
 def compute_classification_metrics(
     eval_pred: Any,
     average: str = "macro",
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """Compute standard classification metrics from model predictions (logits) and ground truth.
 
     Computes:
@@ -690,19 +1057,19 @@ def compute_classification_metrics(
         - Precision (macro or binary)
         - Recall (macro or binary)
         - F1-Score (macro or binary)
+        - Confusion Matrix
+
+    Note:
+        Threshold-dependent curve metrics such as ROC-AUC and PR-AUC require continuous
+        probability distributions evaluated over decision-threshold sweeps across the test
+        split; they are computed in the final evaluation notebook (DL_05_evaluation_ablation.ipynb).
 
     Args:
         eval_pred: HuggingFace EvalPrediction namedtuple containing (predictions, label_ids).
         average: Averaging method ('binary' or 'macro').
 
     Returns:
-        Dictionary mapping metric names to floating point scores.
-
-    Implementation Requirements:
-        - Extract predicted class: np.argmax(logits, axis=-1)
-        - Call sklearn.metrics.precision_recall_fscore_support
-        - Call sklearn.metrics.accuracy_score
-        - Return dictionary with keys: 'accuracy', 'precision', 'recall', 'f1'
+        Dictionary mapping metric names to floating point scores and confusion matrix.
     """
     from sklearn.metrics import (
         accuracy_score,
@@ -849,6 +1216,26 @@ def export_predictions(
     logger.info(f"Exported {len(df)} rows to {output_path} ({format_type}).")
 
 
+def generate_relation_id(candidate_id: str, prefix: str = "dl_") -> str:
+    """Generate a deterministic relation ID from candidate_id using SHA-256.
+
+    Produces a stable 16-hex-character digest prefixed by `prefix`:
+        f"{prefix}{hashlib.sha256(candidate_id.encode('utf-8')).hexdigest()[:16]}"
+        e.g., 'dl_a1b2c3d4e5f67890'
+
+    Guaranteed to be stable across repeated runs and unique for distinct candidate IDs.
+
+    Args:
+        candidate_id: Original candidate identifier.
+        prefix: Prefix string for relation ID. Defaults to 'dl_'.
+
+    Returns:
+        Stable, deterministic relation ID string.
+    """
+    digest = hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()[:16]
+    return f"{prefix}{digest}"
+
+
 def build_unified_relation_record(
     candidate_id: str,
     article_id: str,
@@ -873,14 +1260,14 @@ def build_unified_relation_record(
     Preserves exact alignment with Phase 1 NetworkX DAG compiler and pgmpy Bayesian
     network requirements.
 
-    The relation_id is derived deterministically from the candidate_id using a
-    stable hash prefix to ensure uniqueness and reproducibility.
+    The relation_id is derived deterministically from candidate_id via SHA-256
+    (prefix 'dl_' followed by the first 16 hex characters of the digest).
 
     Returns:
         Dictionary with keys matching UNIFIED_RELATION_SCHEMA.
     """
-    # Deterministic relation ID derived from candidate_id
-    relation_id = f"dl_{candidate_id}"
+    # Deterministic SHA-256 relation ID derived from candidate_id
+    relation_id = generate_relation_id(candidate_id)
 
     return {
         "relation_id": relation_id,

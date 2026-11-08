@@ -20,6 +20,7 @@ or GPU hardware required.
 """
 
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -198,17 +199,29 @@ class TestDatasetValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             dl_utils.validate_dataset_schema(mock_ds, ["text", "label"])
 
-    def test_null_warning_in_critical_fields(self):
+    def test_null_value_in_critical_field_raises(self):
         df = pd.DataFrame({
             "candidate_id": ["c1", None, "c3"],
             "label": [1, 0, 1],
             "split": ["train", "train", "train"],
         })
-        # Should not raise, but should log warning
-        result = dl_utils.validate_dataset_schema(
-            df, ["candidate_id", "label", "split"], "TestDS"
-        )
-        self.assertTrue(result)
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.validate_dataset_schema(
+                df, ["candidate_id", "label", "split"], "TestDS"
+            )
+        self.assertIn("null values", str(ctx.exception).lower())
+
+    def test_empty_string_in_critical_field_raises(self):
+        df = pd.DataFrame({
+            "candidate_id": ["c1", "  ", "c3"],
+            "label": [1, 0, 1],
+            "split": ["train", "train", "train"],
+        })
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.validate_dataset_schema(
+                df, ["candidate_id", "label", "split"], "TestDS"
+            )
+        self.assertIn("empty string values", str(ctx.exception).lower())
 
 
 # ===========================================================================
@@ -236,13 +249,37 @@ class TestBioCauseCandidateValidation(unittest.TestCase):
         self.assertIn("train", summary)
         self.assertIn("test", summary)
 
+    def test_missing_required_column_detected_early_no_keyerror(self):
+        df = self._make_biocause_df().drop(columns=["label"])
+        # Should raise ValueError, NOT KeyError
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.validate_biocause_candidates(df)
+        self.assertIn("missing required columns", str(ctx.exception).lower())
+        self.assertIn("label", str(ctx.exception))
+
+    def test_null_critical_field_raises(self):
+        for field in ["candidate_id", "article_id", "label", "split", "arg1_text"]:
+            df = self._make_biocause_df()
+            df.loc[2, field] = None
+            with self.assertRaises(ValueError) as ctx:
+                dl_utils.validate_biocause_candidates(df)
+            self.assertIn(f"'{field}'", str(ctx.exception))
+            self.assertIn("null values", str(ctx.exception).lower())
+
+    def test_empty_string_critical_field_raises(self):
+        df = self._make_biocause_df()
+        df.loc[3, "candidate_id"] = "   "
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.validate_biocause_candidates(df)
+        self.assertIn("empty string values", str(ctx.exception).lower())
+
     def test_article_overlap_raises(self):
         df = self._make_biocause_df()
         # Create overlap: PMC1 in both train and test
         df.loc[5, "article_id"] = "PMC1"
         with self.assertRaises(ValueError) as ctx:
             dl_utils.validate_biocause_candidates(df)
-        self.assertIn("overlap", str(ctx.exception).lower())
+        self.assertIn("leakage", str(ctx.exception).lower())
 
     def test_invalid_labels_raises(self):
         df = self._make_biocause_df()
@@ -381,32 +418,58 @@ class TestContextCropping(unittest.TestCase):
 
     def test_short_text_unchanged(self):
         marked = "[E1] PmrB [/E1] activates [E2] PmrA [/E2]."
-        result = dl_utils.crop_context_around_entities(marked, max_tokens=512)
+        result = dl_utils.crop_context_around_entities(marked, max_tokens=384)
         self.assertEqual(result, marked)
 
-    def test_long_text_preserves_markers(self):
-        # Create artificially long text
-        prefix = "A " * 500
-        suffix = " B" * 500
+    def test_long_text_preserves_markers_and_stays_within_budget(self):
+        prefix = "word " * 400
+        suffix = " token" * 400
         marked = prefix + "[E1] PmrB [/E1] activates [E2] PmrA [/E2]" + suffix
-        result = dl_utils.crop_context_around_entities(marked, max_tokens=100)
+        result = dl_utils.crop_context_around_entities(marked, max_tokens=384)
         self.assertIn("[E1]", result)
         self.assertIn("[/E1]", result)
         self.assertIn("[E2]", result)
         self.assertIn("[/E2]", result)
         self.assertIn("PmrB", result)
         self.assertIn("PmrA", result)
+        # Verify token count stays strictly within 384 (budget 382)
+        import re
+        tokens = re.findall(r"\w+|[^\w\s]", result)
+        self.assertLessEqual(len(tokens), 382)
 
-    def test_entities_far_apart_preserves_both(self):
-        left = "A " * 200
-        middle = "B " * 200
-        right = "C " * 200
-        marked = left + "[E1] Gene1 [/E1]" + middle + "[E2] Gene2 [/E2]" + right
-        result = dl_utils.crop_context_around_entities(marked, max_tokens=150)
+    def test_distant_arguments_inserts_gap_separator_and_preserves_markers(self):
+        left = "prefix " * 150
+        middle = "distant intervening passage " * 100
+        right = "suffix " * 150
+        marked = left + "[E1] CauseEntity [/E1]" + middle + "[E2] EffectEntity [/E2]" + right
+        result = dl_utils.crop_context_around_entities(marked, max_tokens=384, gap_separator=" ... ")
+        self.assertIn(" ... ", result)
         self.assertIn("[E1]", result)
+        self.assertIn("[/E1]", result)
         self.assertIn("[E2]", result)
-        self.assertIn("Gene1", result)
-        self.assertIn("Gene2", result)
+        self.assertIn("[/E2]", result)
+        self.assertIn("CauseEntity", result)
+        self.assertIn("EffectEntity", result)
+        import re
+        tokens = re.findall(r"\w+|[^\w\s]", result)
+        self.assertLessEqual(len(tokens), 382)
+
+    def test_oversized_entities_raises_descriptive_error(self):
+        huge_entity1 = "E1_word " * 250
+        huge_entity2 = "E2_word " * 250
+        marked = f"[E1] {huge_entity1} [/E1] activates [E2] {huge_entity2} [/E2]"
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.crop_context_around_entities(
+                marked, max_tokens=384, candidate_id="cand_huge_001"
+            )
+        self.assertIn("cand_huge_001", str(ctx.exception))
+        self.assertIn("exceed token budget", str(ctx.exception).lower())
+
+    def test_backward_compatible_alias(self):
+        marked = "[E1] Arg1 [/E1] causes [E2] Arg2 [/E2]"
+        res1 = dl_utils.crop_context_around_entities(marked, max_tokens=384)
+        res2 = dl_utils.crop_context_preserving_markers(marked, max_tokens=384)
+        self.assertEqual(res1, res2)
 
 
 # ===========================================================================
@@ -696,6 +759,17 @@ class TestUnifiedRelationRecord(unittest.TestCase):
         )
         self.assertNotEqual(record1["relation_id"], record2["relation_id"])
 
+    def test_sha256_relation_id_format_and_stability(self):
+        rel_id = dl_utils.generate_relation_id("candidate_abc_123")
+        import re
+        self.assertTrue(bool(re.match(r"^dl_[0-9a-f]{16}$", rel_id)), f"Unexpected ID format: {rel_id}")
+        for _ in range(50):
+            self.assertEqual(dl_utils.generate_relation_id("candidate_abc_123"), rel_id)
+
+    def test_sha256_relation_id_uniqueness(self):
+        ids = [dl_utils.generate_relation_id(f"candidate_{i}") for i in range(100)]
+        self.assertEqual(len(set(ids)), 100)
+
     def test_default_direction_and_provenance(self):
         record = dl_utils.build_unified_relation_record(
             candidate_id="cand_001",
@@ -739,7 +813,171 @@ class TestUnifiedRelationRecord(unittest.TestCase):
 
 
 # ===========================================================================
-# 14. Constants Verification
+# 14. BioCause Section Loading and Source Context Reconstruction
+# ===========================================================================
+class TestBioCauseSectionLoadingAndReconstruction(unittest.TestCase):
+    """Verify loading BioCause raw section text and reconstructing context with markers."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_resolve_biocause_section_path_corpus_dir(self):
+        corpus_dir = Path(self.temp_dir) / "BioCause_corpus"
+        corpus_dir.mkdir(parents=True, exist_ok=True)
+        sec_file = corpus_dir / "12345.txt"
+        sec_file.write_text("Sample section content.", encoding="utf-8")
+
+        resolved = dl_utils.resolve_biocause_section_path("12345", self.temp_dir)
+        self.assertEqual(resolved, sec_file.resolve())
+
+    def test_resolve_biocause_section_path_fallback_dir(self):
+        sec_file = Path(self.temp_dir) / "67890.txt"
+        sec_file.write_text("Fallback section content.", encoding="utf-8")
+
+        resolved = dl_utils.resolve_biocause_section_path("67890", self.temp_dir)
+        self.assertEqual(resolved, sec_file.resolve())
+
+    def test_resolve_biocause_section_path_missing_raises(self):
+        with self.assertRaises(FileNotFoundError):
+            dl_utils.resolve_biocause_section_path("non_existent_section", self.temp_dir)
+
+    def test_load_biocause_section_text_caching(self):
+        sec_file = Path(self.temp_dir) / "cache_sec.txt"
+        sec_file.write_text("Cached text content.", encoding="utf-8")
+
+        cache = {}
+        content1 = dl_utils.load_biocause_section_text("cache_sec", self.temp_dir, cache=cache)
+        self.assertEqual(content1, "Cached text content.")
+        self.assertIn("cache_sec", cache)
+
+        # Overwrite file to verify cache is returned
+        sec_file.write_text("Modified text.", encoding="utf-8")
+        content2 = dl_utils.load_biocause_section_text("cache_sec", self.temp_dir, cache=cache)
+        self.assertEqual(content2, "Cached text content.")
+
+    def test_reconstruct_exact_match(self):
+        text = "PmrB phosphorylates PmrA in Salmonella enterica."
+        marked = dl_utils.reconstruct_biocause_context_with_markers(
+            section_text=text,
+            arg1_start=0,
+            arg1_end=4,
+            arg1_text="PmrB",
+            arg2_start=20,
+            arg2_end=24,
+            arg2_text="PmrA",
+            candidate_id="cand_exact",
+        )
+        self.assertIn("[E1] PmrB [/E1]", marked)
+        self.assertIn("[E2] PmrA [/E2]", marked)
+        self.assertTrue(marked.startswith("[E1] PmrB [/E1]"))
+        self.assertIn("Salmonella enterica.", marked)
+
+    def test_reconstruct_newline_normalization(self):
+        text = "Phosphorylated PmrB\nprotein regulates PmrA."
+        marked = dl_utils.reconstruct_biocause_context_with_markers(
+            section_text=text,
+            arg1_start=15,
+            arg1_end=27,
+            arg1_text="PmrB protein",
+            arg2_start=38,
+            arg2_end=42,
+            arg2_text="PmrA",
+            candidate_id="cand_newline",
+        )
+        self.assertIn("[E1] PmrB\nprotein [/E1]", marked)
+        self.assertIn("[E2] PmrA [/E2]", marked)
+
+    def test_reconstruct_mismatch_raises_value_error(self):
+        text = "PmrB phosphorylates PmrA in Salmonella enterica."
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.reconstruct_biocause_context_with_markers(
+                section_text=text,
+                arg1_start=0,
+                arg1_end=4,
+                arg1_text="WrongGene",
+                arg2_start=20,
+                arg2_end=24,
+                arg2_text="PmrA",
+                candidate_id="cand_mismatch",
+            )
+        self.assertIn("cand_mismatch", str(ctx.exception))
+        self.assertIn("span mismatch", str(ctx.exception).lower())
+
+    def test_reconstruct_out_of_bounds_raises_value_error(self):
+        text = "Short text."
+        with self.assertRaises(ValueError) as ctx:
+            dl_utils.reconstruct_biocause_context_with_markers(
+                section_text=text,
+                arg1_start=0,
+                arg1_end=50,
+                arg1_text="OutOfBounds",
+                arg2_start=55,
+                arg2_end=60,
+                arg2_text="Target",
+                candidate_id="cand_oob",
+            )
+        self.assertIn("cand_oob", str(ctx.exception))
+        self.assertIn("invalid arg1 offset", str(ctx.exception).lower())
+
+    def test_reconstruct_applies_max_length_cropping(self):
+        long_prefix = "context " * 200
+        long_suffix = " appendix" * 200
+        text = f"{long_prefix}PmrB activates PmrA.{long_suffix}"
+        p_len = len(long_prefix)
+        marked = dl_utils.reconstruct_biocause_context_with_markers(
+            section_text=text,
+            arg1_start=p_len,
+            arg1_end=p_len + 4,
+            arg1_text="PmrB",
+            arg2_start=p_len + 15,
+            arg2_end=p_len + 19,
+            arg2_text="PmrA",
+            max_tokens=384,
+            candidate_id="cand_crop",
+        )
+        self.assertIn("[E1] PmrB [/E1]", marked)
+        self.assertIn("[E2] PmrA [/E2]", marked)
+        import re
+        tokens = re.findall(r"\w+|[^\w\s]", marked)
+        self.assertLessEqual(len(tokens), 382)
+
+
+# ===========================================================================
+# 15. Tokenizer Profiling Helper
+# ===========================================================================
+class TestTokenizerProfiling(unittest.TestCase):
+    """Verify sequence length profiling helper."""
+
+    def test_profile_token_lengths_returns_expected_stats(self):
+        texts = [
+            "Short sentence.",
+            "A slightly longer sentence for profiling token lengths.",
+            "Another sentence with various words and symbols!",
+        ]
+        stats = dl_utils.profile_token_lengths(texts, target_budget=10)
+        self.assertEqual(stats["total_samples"], 3)
+        self.assertIn("mean", stats)
+        self.assertIn("std", stats)
+        self.assertIn("min", stats)
+        self.assertIn("max", stats)
+        self.assertIn("p50", stats)
+        self.assertIn("p90", stats)
+        self.assertIn("p95", stats)
+        self.assertIn("p99", stats)
+        self.assertEqual(stats["target_budget"], 10)
+        self.assertIn("exceeding_target_budget", stats)
+        self.assertIn("pct_exceeding", stats)
+
+    def test_profile_token_lengths_empty_raises(self):
+        with self.assertRaises(ValueError):
+            dl_utils.profile_token_lengths([])
+
+
+# ===========================================================================
+# 16. Constants Verification
 # ===========================================================================
 class TestConstants(unittest.TestCase):
     """Verify that module constants are defined correctly."""
