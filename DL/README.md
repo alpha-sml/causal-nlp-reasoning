@@ -120,15 +120,15 @@ DL_01_data_preparation.ipynb
     - data/processed/dl_biocause_{train,val,test}.csv
   Outputs:
     - DL/checkpoints/biocause_pubmedbert/ (best model weights)
-    - data/processed/dl_biocause_validation_predictions.csv (1,914 rows; columns: candidate_id, article_id, section_id, arg1_id, arg2_id, true_label, dl_prob, dl_pred, split)
-    - data/processed/dl_biocause_test_predictions.csv (1,408 rows; columns: candidate_id, article_id, section_id, arg1_id, arg2_id, true_label, dl_prob, dl_pred, split)
+    - data/processed/dl_biocause_validation_predictions.csv (1,884 rows; columns: candidate_id, article_id, section_id, arg1_id, arg2_id, true_label, dl_prob, dl_pred, split)
+    - data/processed/dl_biocause_test_predictions.csv (1,394 rows; columns: candidate_id, article_id, section_id, arg1_id, arg2_id, true_label, dl_prob, dl_pred, split)
 
 [DL_04: Hybrid Integration & Graph Compilation]
   Inputs:
     - data/processed/aml_biocause_validation_predictions.csv (Phase 1 AML prerequisite, 1,914 rows)
     - data/processed/aml_biocause_test_predictions.csv (Phase 1 AML prerequisite, 1,408 rows)
-    - data/processed/dl_biocause_validation_predictions.csv (from DL_03, 1,914 rows)
-    - data/processed/dl_biocause_test_predictions.csv (from DL_03, 1,408 rows)
+    - data/processed/dl_biocause_validation_predictions.csv (from DL_03, 1,884 rows)
+    - data/processed/dl_biocause_test_predictions.csv (from DL_03, 1,394 rows)
   Outputs:
     - data/processed/dl_biocause_hybrid_predictions.csv (17-column UnifiedRelationRecord schema)
     - Verified acyclic NetworkX DAG and pgmpy Bayesian Network

@@ -1125,8 +1125,9 @@ class TestTrainingArgumentsFactory(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+    @patch("torch.cuda.set_device", create=True)
     @patch("torch.cuda.is_available", return_value=True)
-    def test_cuda_available_enables_fp16_by_default(self, mock_cuda):
+    def test_cuda_available_enables_fp16_by_default(self, mock_cuda, mock_set_device):
         args = dl_utils.get_training_arguments(output_dir=self.temp_dir)
         self.assertTrue(args.fp16)
 
