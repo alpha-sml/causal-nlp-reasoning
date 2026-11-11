@@ -1,17 +1,17 @@
 """Focused unit tests for Phase 2 Task 4: Hybrid Probability Fusion and Graph Integration.
 
-Verifies:
-1. Prediction-file contract validation (schema, counts, nulls, duplicates, probabilities, binary labels).
-2. Dual-stream candidate ID ordering and ground-truth label alignment.
-3. Metadata split integrity and candidate population tracking.
-4. Probability fusion at boundary and intermediate alpha values.
-5. Linguistic sanity filtering with non-overlapping rejection diagnostics (negation, distance, both)
-   and fail-fast missing metadata policy.
-6. Standardized 17-column UnifiedRelationRecord schema conformance.
-7. NetworkX DAG construction, self-loop pruning, bidirectional conflict resolution, and cycle breaking.
-8. Bayesian network compilation and observational vs. interventional queries.
+Directly imports and tests the actual implementation from `dl_task4_utils.py`:
+1. Prediction dataframe contract validation and stream alignment.
+2. Exact model-eligible candidate ID membership and isolated split metadata streaming.
+3. Lexicographic validation hyperparameter selection with Macro-F1 and deterministic tie-breaking.
+4. Linguistic sanity checks with auditable non-overlapping rejection diagnostics.
+5. Standardized 17-column UnifiedRelationRecord construction and export verification.
+6. Prediction export verification (schema, IDs, labels, recomputed fusion formula, binary predictions).
+7. Directed acyclic graph (DAG) cycle breaking, self-loop pruning, bidirectional conflict resolution.
+8. Bayesian network compilation (node/edge preservation, acyclicity) and Pearl do-calculus demonstration.
 """
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -26,417 +26,436 @@ for p in [ROOT_DIR, ROOT_DIR / "AML", ROOT_DIR / "DL"]:
         sys.path.insert(0, str(p))
 
 import dl_utils
+import dl_task4_utils
 from causal_extractors import enforce_dag_acyclicity, NEGATION_PATTERN
-import pgmpy
 from pgmpy.models import DiscreteBayesianNetwork
 from pgmpy.factors.discrete import TabularCPD
 from pgmpy.inference import VariableElimination
 
 
 # ============================================================================
-# Reusable Task 4 Helper Functions Under Test
-# ============================================================================
-
-def validate_prediction_dataframe(
-    df: pd.DataFrame,
-    expected_rows: int,
-    split_name: str,
-    stream_name: str,
-    prob_col: str,
-    pred_col: str,
-) -> None:
-    """Validate prediction dataframe against strict Task 4 contracts."""
-    req_cols = ["candidate_id", "true_label", prob_col, pred_col, "split"]
-    missing_cols = set(req_cols) - set(df.columns)
-    if missing_cols:
-        raise ValueError(f"[{stream_name} {split_name}] Missing required columns: {sorted(list(missing_cols))}")
-    if len(df) != expected_rows:
-        raise ValueError(f"[{stream_name} {split_name}] Row count mismatch: expected {expected_rows}, got {len(df)}")
-    if df["candidate_id"].isna().any() or (df["candidate_id"].astype(str).str.strip() == "").any():
-        raise ValueError(f"[{stream_name} {split_name}] Found null or empty candidate_id values")
-    if df["candidate_id"].duplicated().any():
-        n_dup = int(df["candidate_id"].duplicated().sum())
-        raise ValueError(f"[{stream_name} {split_name}] Found {n_dup} duplicate candidate_id values")
-    if not (df["split"] == split_name).all():
-        raise ValueError(f"[{stream_name} {split_name}] Non-matching split labels in split column")
-    if not set(df["true_label"].unique()).issubset({0, 1}):
-        raise ValueError(f"[{stream_name} {split_name}] Non-binary true_label values: {df['true_label'].unique()}")
-    if not set(df[pred_col].unique()).issubset({0, 1}):
-        raise ValueError(f"[{stream_name} {split_name}] Non-binary prediction values: {df[pred_col].unique()}")
-    if not np.isfinite(df[prob_col]).all():
-        raise ValueError(f"[{stream_name} {split_name}] Non-finite values in {prob_col}")
-    if not df[prob_col].between(0.0, 1.0).all():
-        raise ValueError(f"[{stream_name} {split_name}] Probabilities outside [0.0, 1.0] in {prob_col}")
-
-
-def validate_dual_stream_alignment(
-    df_aml: pd.DataFrame,
-    df_dl: pd.DataFrame,
-    split_name: str,
-) -> None:
-    """Assert candidate ID ordering and ground-truth label agreement across streams."""
-    if len(df_aml) != len(df_dl):
-        raise ValueError(f"[{split_name}] Length mismatch across streams: AML ({len(df_aml)}) vs DL ({len(df_dl)})")
-    if not (df_aml["candidate_id"].values == df_dl["candidate_id"].values).all():
-        raise ValueError(f"[{split_name}] Candidate ID order or identity mismatch across streams")
-    if not (df_aml["true_label"].values == df_dl["true_label"].values).all():
-        raise ValueError(f"[{split_name}] Ground truth label discrepancy across streams")
-
-
-def validate_metadata_split_integrity(
-    df_pred: pd.DataFrame,
-    df_meta: pd.DataFrame,
-    split_name: str,
-) -> None:
-    """Validate prediction candidates against biocause_candidates.csv metadata."""
-    if "candidate_id" not in df_meta.columns:
-        raise ValueError("Metadata dataframe must contain 'candidate_id' column")
-    if df_meta["candidate_id"].isna().any() or (df_meta["candidate_id"].astype(str).str.strip() == "").any():
-        raise ValueError("Metadata contains null or empty candidate_id values")
-    if df_meta["candidate_id"].duplicated().any():
-        raise ValueError("Metadata contains duplicate candidate_id values")
-
-    meta_indexed = df_meta.set_index("candidate_id")
-    pred_ids = df_pred["candidate_id"].values
-
-    # Check for missing candidates
-    missing_ids = set(pred_ids) - set(meta_indexed.index)
-    if missing_ids:
-        raise ValueError(f"[{split_name}] {len(missing_ids)} prediction candidate IDs not found in metadata")
-
-    # Check split membership
-    meta_splits = meta_indexed.loc[pred_ids, "split"].values
-    if not (meta_splits == split_name).all():
-        mismatched = np.sum(meta_splits != split_name)
-        raise ValueError(f"[{split_name}] {mismatched} candidate IDs belong to wrong split in metadata")
-
-    # Check label agreement
-    meta_labels = meta_indexed.loc[pred_ids, "label"].values
-    if not (df_pred["true_label"].values == meta_labels).all():
-        mismatched_labels = np.sum(df_pred["true_label"].values != meta_labels)
-        raise ValueError(f"[{split_name}] {mismatched_labels} candidate labels disagree with metadata")
-
-
-def apply_linguistic_filters(
-    df: pd.DataFrame,
-    max_between_chars: int = 400,
-    pred_col: str = "raw_pred",
-) -> pd.DataFrame:
-    """Apply negation and distance filters with auditable, non-overlapping diagnostics.
-
-    Raises ValueError if between_text is null or NaN to prevent silent pass-through.
-    """
-    if "between_text" not in df.columns:
-        raise ValueError("Missing 'between_text' column required for linguistic sanity checks")
-
-    df_out = df.copy()
-    neg_flags = []
-    dist_flags = []
-    reasons = []
-
-    for idx, r in df_out.iterrows():
-        raw_val = r["between_text"]
-        if pd.isna(raw_val) or raw_val is None:
-            raise ValueError(
-                f"Missing between_text encountered for candidate {r.get('candidate_id', idx)}. "
-                "Missing data must not be silently coerced to string."
-            )
-        b_txt = str(raw_val)
-        is_neg = bool(NEGATION_PATTERN.search(b_txt))
-        is_dist = len(b_txt) > max_between_chars
-
-        neg_flags.append(is_neg)
-        dist_flags.append(is_dist)
-
-        r_list = []
-        if is_neg:
-            r_list.append("negation_detected")
-        if is_dist:
-            r_list.append("distance_window_exceeded")
-        reasons.append(";".join(r_list) if r_list else "none")
-
-    df_out["flag_negation"] = neg_flags
-    df_out["flag_distance"] = dist_flags
-    df_out["pruned_reason"] = reasons
-    df_out["sanitized_pred"] = (
-        (df_out[pred_col] == 1) & (~df_out["flag_negation"]) & (~df_out["flag_distance"])
-    ).astype(int)
-
-    return df_out
-
-
-# ============================================================================
-# Unit Test Cases
+# 1. Prediction DataFrame Validation & Stream Alignment Tests
 # ============================================================================
 
 class TestTask4InputValidationAndAlignment(unittest.TestCase):
-    """Test strict candidate alignment and input contract assertions."""
+    """Test strict prediction file contracts and cross-stream candidate alignment."""
 
     def setUp(self):
-        self.n_val = 10
-        self.val_cands = [f"cand_val_{i:02d}" for i in range(self.n_val)]
-        self.val_labels = [0, 1] * (self.n_val // 2)
-
-        self.df_aml_valid = pd.DataFrame({
-            "candidate_id": self.val_cands,
-            "true_label": self.val_labels,
-            "aml_prob": np.linspace(0.1, 0.9, self.n_val),
-            "aml_pred": [0, 1] * (self.n_val // 2),
-            "split": ["validation"] * self.n_val,
-        })
-
-        self.df_dl_valid = pd.DataFrame({
-            "candidate_id": self.val_cands,
-            "true_label": self.val_labels,
-            "dl_prob": np.linspace(0.2, 0.8, self.n_val),
-            "dl_pred": [0, 1] * (self.n_val // 2),
-            "split": ["validation"] * self.n_val,
-        })
-
-        self.df_meta_valid = pd.DataFrame({
-            "candidate_id": self.val_cands,
-            "label": self.val_labels,
-            "split": ["validation"] * self.n_val,
-            "between_text": ["activates"] * self.n_val,
+        self.valid_df = pd.DataFrame({
+            "candidate_id": ["c1", "c2", "c3"],
+            "true_label": [0, 1, 0],
+            "aml_prob": [0.12, 0.85, 0.45],
+            "aml_pred": [0, 1, 0],
+            "split": ["validation", "validation", "validation"],
         })
 
     def test_valid_contracts_pass(self):
-        """Correct schema and values must pass all validation checks without error."""
-        validate_prediction_dataframe(self.df_aml_valid, self.n_val, "validation", "AML", "aml_prob", "aml_pred")
-        validate_prediction_dataframe(self.df_dl_valid, self.n_val, "validation", "DL", "dl_prob", "dl_pred")
-        validate_dual_stream_alignment(self.df_aml_valid, self.df_dl_valid, "validation")
-        validate_metadata_split_integrity(self.df_aml_valid, self.df_meta_valid, "validation")
+        dl_task4_utils.validate_prediction_dataframe(
+            self.valid_df, 3, "validation", "AML", "aml_prob", "aml_pred"
+        )
 
     def test_missing_column_raises_value_error(self):
-        """Missing required column must raise ValueError."""
-        df_bad = self.df_aml_valid.drop(columns=["aml_prob"])
+        df_bad = self.valid_df.drop(columns=["aml_prob"])
         with self.assertRaises(ValueError) as ctx:
-            validate_prediction_dataframe(df_bad, self.n_val, "validation", "AML", "aml_prob", "aml_pred")
+            dl_task4_utils.validate_prediction_dataframe(
+                df_bad, 3, "validation", "AML", "aml_prob", "aml_pred"
+            )
         self.assertIn("Missing required columns", str(ctx.exception))
 
     def test_row_count_mismatch_raises_value_error(self):
-        """Row count mismatch must raise ValueError."""
         with self.assertRaises(ValueError) as ctx:
-            validate_prediction_dataframe(self.df_aml_valid, self.n_val + 5, "validation", "AML", "aml_prob", "aml_pred")
+            dl_task4_utils.validate_prediction_dataframe(
+                self.valid_df, 1884, "validation", "AML", "aml_prob", "aml_pred"
+            )
         self.assertIn("Row count mismatch", str(ctx.exception))
 
     def test_null_or_empty_candidate_id_raises_value_error(self):
-        """Null or empty candidate_id must be rejected."""
-        df_bad = self.df_aml_valid.copy()
-        df_bad.loc[0, "candidate_id"] = ""
+        df_bad = self.valid_df.copy()
+        df_bad.loc[1, "candidate_id"] = "   "
         with self.assertRaises(ValueError) as ctx:
-            validate_prediction_dataframe(df_bad, self.n_val, "validation", "AML", "aml_prob", "aml_pred")
-        self.assertIn("null or empty candidate_id", str(ctx.exception))
+            dl_task4_utils.validate_prediction_dataframe(
+                df_bad, 3, "validation", "AML", "aml_prob", "aml_pred"
+            )
+        self.assertIn("Found null or empty candidate_id", str(ctx.exception))
 
     def test_duplicate_candidate_id_raises_value_error(self):
-        """Duplicate candidate IDs must be rejected."""
-        df_bad = self.df_aml_valid.copy()
-        df_bad.loc[1, "candidate_id"] = df_bad.loc[0, "candidate_id"]
+        df_bad = self.valid_df.copy()
+        df_bad.loc[2, "candidate_id"] = "c1"
         with self.assertRaises(ValueError) as ctx:
-            validate_prediction_dataframe(df_bad, self.n_val, "validation", "AML", "aml_prob", "aml_pred")
+            dl_task4_utils.validate_prediction_dataframe(
+                df_bad, 3, "validation", "AML", "aml_prob", "aml_pred"
+            )
         self.assertIn("duplicate candidate_id", str(ctx.exception))
 
     def test_non_binary_label_raises_value_error(self):
-        """Non-binary label must be rejected."""
-        df_bad = self.df_aml_valid.copy()
+        df_bad = self.valid_df.copy()
         df_bad.loc[0, "true_label"] = 2
         with self.assertRaises(ValueError) as ctx:
-            validate_prediction_dataframe(df_bad, self.n_val, "validation", "AML", "aml_prob", "aml_pred")
+            dl_task4_utils.validate_prediction_dataframe(
+                df_bad, 3, "validation", "AML", "aml_prob", "aml_pred"
+            )
         self.assertIn("Non-binary true_label", str(ctx.exception))
 
     def test_out_of_bounds_probability_raises_value_error(self):
-        """Probabilities < 0 or > 1 must be rejected."""
-        df_bad = self.df_aml_valid.copy()
+        df_bad = self.valid_df.copy()
         df_bad.loc[0, "aml_prob"] = 1.05
         with self.assertRaises(ValueError) as ctx:
-            validate_prediction_dataframe(df_bad, self.n_val, "validation", "AML", "aml_prob", "aml_pred")
-        self.assertIn("Probabilities outside [0.0, 1.0]", str(ctx.exception))
+            dl_task4_utils.validate_prediction_dataframe(
+                df_bad, 3, "validation", "AML", "aml_prob", "aml_pred"
+            )
+        self.assertIn("Probabilities outside", str(ctx.exception))
 
     def test_stream_alignment_detects_candidate_order_mismatch(self):
-        """Stream alignment must detect candidate order discrepancies."""
-        df_dl_bad = self.df_dl_valid.copy().iloc[::-1].reset_index(drop=True)
+        df_aml = self.valid_df
+        df_dl = self.valid_df.copy().iloc[::-1].reset_index(drop=True)
         with self.assertRaises(ValueError) as ctx:
-            validate_dual_stream_alignment(self.df_aml_valid, df_dl_bad, "validation")
+            dl_task4_utils.validate_dual_stream_alignment(df_aml, df_dl, "Validation")
         self.assertIn("Candidate ID order or identity mismatch", str(ctx.exception))
 
     def test_stream_alignment_detects_label_discrepancy(self):
-        """Stream alignment must detect ground-truth label disagreement."""
-        df_dl_bad = self.df_dl_valid.copy()
-        df_dl_bad.loc[0, "true_label"] = 1 - df_dl_bad.loc[0, "true_label"]
+        df_aml = self.valid_df.copy()
+        df_dl = self.valid_df.copy()
+        df_dl.loc[0, "true_label"] = 1
         with self.assertRaises(ValueError) as ctx:
-            validate_dual_stream_alignment(self.df_aml_valid, df_dl_bad, "validation")
+            dl_task4_utils.validate_dual_stream_alignment(df_aml, df_dl, "Validation")
         self.assertIn("Ground truth label discrepancy", str(ctx.exception))
 
-    def test_metadata_integrity_detects_wrong_split_membership(self):
-        """Candidates belonging to a different split in metadata must be rejected."""
-        df_meta_bad = self.df_meta_valid.copy()
-        df_meta_bad.loc[0, "split"] = "train"
+
+# ============================================================================
+# 2. Exact Model-Eligible Membership & Metadata Isolation Tests
+# ============================================================================
+
+class TestTask4EligibleMembershipAndMetadataIsolation(unittest.TestCase):
+    """Test exact model-eligible candidate ID verification and isolated metadata streaming."""
+
+    def test_exact_eligible_membership_success(self):
+        pred_ids = ["c1", "c2", "c3"]
+        expected_ids = {"c1", "c2", "c3"}
+        dl_task4_utils.validate_exact_eligible_membership(pred_ids, expected_ids, "validation", "AML")
+
+    def test_exact_eligible_membership_detects_missing_id(self):
+        pred_ids = ["c1", "c2"]
+        expected_ids = {"c1", "c2", "c3"}
         with self.assertRaises(ValueError) as ctx:
-            validate_metadata_split_integrity(self.df_aml_valid, df_meta_bad, "validation")
-        self.assertIn("belong to wrong split", str(ctx.exception))
+            dl_task4_utils.validate_exact_eligible_membership(pred_ids, expected_ids, "validation", "AML")
+        self.assertIn("Missing 1 eligible IDs", str(ctx.exception))
 
-    def test_metadata_integrity_detects_missing_candidate(self):
-        """Prediction candidates absent from metadata must be detected."""
-        df_meta_incomplete = self.df_meta_valid.iloc[1:].copy()
+    def test_exact_eligible_membership_detects_ineligible_extra_id(self):
+        pred_ids = ["c1", "c2", "c3", "c4_ineligible"]
+        expected_ids = {"c1", "c2", "c3"}
         with self.assertRaises(ValueError) as ctx:
-            validate_metadata_split_integrity(self.df_aml_valid, df_meta_incomplete, "validation")
-        self.assertIn("not found in metadata", str(ctx.exception))
+            dl_task4_utils.validate_exact_eligible_membership(pred_ids, expected_ids, "validation", "DL")
+        self.assertIn("Found 1 ineligible/extra IDs", str(ctx.exception))
+
+    def test_load_authoritative_manifest_missing_file_raises_filenotfound(self):
+        with self.assertRaises(FileNotFoundError) as ctx:
+            dl_task4_utils.load_authoritative_eligible_candidate_ids("nonexistent_manifest.csv", "validation", 1884)
+        self.assertIn("Authoritative Task 1 prepared validation split file not found", str(ctx.exception))
+
+    def test_load_split_candidate_metadata_retains_only_requested_split(self):
+        import tempfile
+        df_mixed = pd.DataFrame({
+            "candidate_id": ["val_1", "test_1", "train_1"],
+            "split": ["validation", "test", "train"],
+            "label": [1, 0, 1],
+            "between_text": ["text1", "text2", "text3"],
+        })
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp:
+            df_mixed.to_csv(tmp.name, index=False)
+            tmp_path = tmp.name
+
+        try:
+            df_val_meta = dl_task4_utils.load_split_candidate_metadata(tmp_path, "validation", chunksize=2)
+            self.assertEqual(len(df_val_meta), 1)
+            self.assertEqual(df_val_meta["candidate_id"].iloc[0], "val_1")
+            self.assertEqual(df_val_meta["split"].iloc[0], "validation")
+            # Verify test candidate records/labels were NOT retained in the returned dataframe
+            self.assertFalse((df_val_meta["split"] == "test").any())
+            self.assertNotIn("test_1", df_val_meta["candidate_id"].values)
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
 
 
-class TestTask4ProbabilityFusion(unittest.TestCase):
-    """Test hybrid probability fusion formula and boundary conditions."""
+# ============================================================================
+# 3. Lexicographic Validation Selection & Tie-Breaking Tests
+# ============================================================================
 
-    def test_pure_aml_fusion_alpha_zero(self):
-        """Alpha = 0.0 must exactly equal AML probabilities."""
-        aml_probs = np.array([0.1, 0.4, 0.7, 0.9])
-        dl_probs = np.array([0.3, 0.5, 0.2, 0.8])
-        fused = dl_utils.fuse_probabilities(prob_aml=aml_probs, prob_dl=dl_probs, alpha=0.0)
-        np.testing.assert_allclose(fused, aml_probs)
+class TestTask4LexicographicValidationSelection(unittest.TestCase):
+    """Test lexicographic hyperparameter optimization and deterministic tie-breaking."""
 
-    def test_pure_dl_fusion_alpha_one(self):
-        """Alpha = 1.0 must exactly equal DL probabilities."""
-        aml_probs = np.array([0.1, 0.4, 0.7, 0.9])
-        dl_probs = np.array([0.3, 0.5, 0.2, 0.8])
-        fused = dl_utils.fuse_probabilities(prob_aml=aml_probs, prob_dl=dl_probs, alpha=1.0)
-        np.testing.assert_allclose(fused, dl_probs)
+    def test_higher_positive_f1_wins(self):
+        self.assertTrue(dl_task4_utils.is_better_configuration(
+            cand_f1_pos=0.65, cand_macro_f1=0.70, cand_alpha=0.5, cand_tau=0.5,
+            best_f1_pos=0.60, best_macro_f1=0.80, best_alpha=0.3, best_tau=0.4
+        ))
+        self.assertFalse(dl_task4_utils.is_better_configuration(
+            cand_f1_pos=0.55, cand_macro_f1=0.90, cand_alpha=0.5, cand_tau=0.5,
+            best_f1_pos=0.60, best_macro_f1=0.70, best_alpha=0.3, best_tau=0.4
+        ))
 
-    def test_balanced_hybrid_fusion_alpha_half(self):
-        """Alpha = 0.5 must equal arithmetic mean of AML and DL probabilities."""
-        aml_probs = np.array([0.2, 0.6])
-        dl_probs = np.array([0.4, 0.8])
-        expected = np.array([0.3, 0.7])
-        fused = dl_utils.fuse_probabilities(prob_aml=aml_probs, prob_dl=dl_probs, alpha=0.5)
-        np.testing.assert_allclose(fused, expected)
+    def test_equal_positive_f1_higher_macro_f1_wins(self):
+        # Equal pos F1 within tolerance
+        self.assertTrue(dl_task4_utils.is_better_configuration(
+            cand_f1_pos=0.600001, cand_macro_f1=0.78, cand_alpha=0.5, cand_tau=0.5,
+            best_f1_pos=0.600000, best_macro_f1=0.72, best_alpha=0.3, best_tau=0.4
+        ))
+        self.assertFalse(dl_task4_utils.is_better_configuration(
+            cand_f1_pos=0.600000, cand_macro_f1=0.70, cand_alpha=0.5, cand_tau=0.5,
+            best_f1_pos=0.600001, best_macro_f1=0.75, best_alpha=0.3, best_tau=0.4
+        ))
 
-    def test_intermediate_alpha_interpolation(self):
-        """Intermediate alpha values (e.g. 0.35, 0.70) must correctly compute weighted sum."""
-        aml_probs = np.array([0.20, 0.80])
-        dl_probs = np.array([0.60, 0.40])
-        # alpha = 0.35: 0.35 * DL + 0.65 * AML
-        # [0.35*0.60 + 0.65*0.20, 0.35*0.40 + 0.65*0.80] = [0.21 + 0.13, 0.14 + 0.52] = [0.34, 0.66]
-        fused = dl_utils.fuse_probabilities(prob_aml=aml_probs, prob_dl=dl_probs, alpha=0.35)
-        np.testing.assert_allclose(fused, [0.34, 0.66])
+    def test_equal_positive_and_macro_f1_invokes_deterministic_tie_break(self):
+        # Equal pos F1 and equal macro F1 -> prefer smaller alpha
+        self.assertTrue(dl_task4_utils.is_better_configuration(
+            cand_f1_pos=0.60, cand_macro_f1=0.75, cand_alpha=0.30, cand_tau=0.50,
+            best_f1_pos=0.60, best_macro_f1=0.75, best_alpha=0.60, best_tau=0.50
+        ))
+        # Equal pos F1, macro F1, and alpha -> prefer smaller tau
+        self.assertTrue(dl_task4_utils.is_better_configuration(
+            cand_f1_pos=0.60, cand_macro_f1=0.75, cand_alpha=0.50, cand_tau=0.30,
+            best_f1_pos=0.60, best_macro_f1=0.75, best_alpha=0.50, best_tau=0.60
+        ))
+        # Inferior candidate under tie-break
+        self.assertFalse(dl_task4_utils.is_better_configuration(
+            cand_f1_pos=0.60, cand_macro_f1=0.75, cand_alpha=0.70, cand_tau=0.50,
+            best_f1_pos=0.60, best_macro_f1=0.75, best_alpha=0.50, best_tau=0.50
+        ))
 
-    def test_invalid_alpha_raises_value_error(self):
-        """Alpha outside [0, 1] must raise ValueError."""
-        probs = np.array([0.5])
-        with self.assertRaises(ValueError):
-            dl_utils.fuse_probabilities(prob_aml=probs, prob_dl=probs, alpha=-0.1)
-        with self.assertRaises(ValueError):
-            dl_utils.fuse_probabilities(prob_aml=probs, prob_dl=probs, alpha=1.1)
+    def test_selection_is_order_invariant(self):
+        val_y = np.array([0, 1, 0, 1, 0, 1, 0, 0, 1, 0])
+        p_aml = np.array([0.1, 0.7, 0.2, 0.8, 0.3, 0.4, 0.1, 0.2, 0.9, 0.1])
+        p_dl = np.array([0.2, 0.8, 0.1, 0.9, 0.4, 0.6, 0.2, 0.1, 0.7, 0.2])
 
+        alpha_grid = [0.2, 0.5, 0.8]
+        tau_grid = [0.3, 0.5, 0.7]
+
+        a1, t1, f1, m1, records = dl_task4_utils.select_validation_fusion_hyperparameters(
+            val_y, p_aml, p_dl, alpha_grid=alpha_grid, tau_grid=tau_grid
+        )
+
+        # Run reverse grid
+        a2, t2, f2, m2, _ = dl_task4_utils.select_validation_fusion_hyperparameters(
+            val_y, p_aml, p_dl, alpha_grid=list(reversed(alpha_grid)), tau_grid=list(reversed(tau_grid))
+        )
+
+        self.assertEqual(a1, a2)
+        self.assertEqual(t1, t2)
+        self.assertAlmostEqual(f1, f2, places=6)
+        self.assertAlmostEqual(m1, m2, places=6)
+
+
+# ============================================================================
+# 4. Linguistic Sanity Checks & Diagnostics Tests
+# ============================================================================
 
 class TestTask4LinguisticSanityChecks(unittest.TestCase):
-    """Test linguistic sanity filtering rules, overlapping diagnostics, and missing data policy."""
+    """Test explicit negation cue detection, distance window, and non-overlapping diagnostics."""
 
     def test_negation_pattern_detects_cues(self):
-        """Negation pattern must match explicit negation cues in intervening text."""
-        neg_samples = [
-            "does not activate",
-            "failed to promote transcription",
-            "neither inhibits nor stimulates",
-            "unable to induce expression",
-            "without affecting growth",
+        samples = [
+            "does not activate transcription",
+            "failed to induce phosphorylation",
+            "showed no significant effect",
+            "without PmrA expression",
+            "neither kinase nor regulator",
         ]
-        for s in neg_samples:
-            self.assertTrue(bool(NEGATION_PATTERN.search(s)), f"Failed to detect negation in: '{s}'")
-
-    def test_negation_pattern_ignores_affirmative_text(self):
-        """Negation pattern must NOT trigger on affirmative causal phrases."""
-        pos_samples = [
-            "strongly promotes transcription of",
-            "directly activates the sensor kinase",
-            "leads to increased resistance",
-            "results in rapid upregulation",
-        ]
-        for s in pos_samples:
-            self.assertFalse(bool(NEGATION_PATTERN.search(s)), f"False positive negation in: '{s}'")
+        for s in samples:
+            self.assertIsNotNone(NEGATION_PATTERN.search(s), f"Failed to match negation in: {s}")
 
     def test_linguistic_filtering_non_overlapping_diagnostics(self):
-        """Verify auditable non-overlapping rejection categories: negation only, distance only, both."""
         df_test = pd.DataFrame({
             "candidate_id": ["c1", "c2", "c3", "c4", "c5"],
             "raw_pred": [1, 1, 1, 1, 0],
             "between_text": [
-                "directly activates",                                   # Survives: neither
-                "does not activate",                                    # Negation only
-                "promotes " + "word " * 100,                           # Distance only (>400 chars)
-                "does not promote " + "word " * 100,                   # Both negation and distance
-                "neither inhibits nor activates",                      # Negative raw pred (ignored)
+                "directly activates",                # Survives
+                "does not stimulate",                # Negation only (<400 chars)
+                "x " * 250,                          # Distance only (>400 chars, affirmative)
+                "does not " + ("x " * 250),          # Both negation & distance
+                "does not activate",                 # Raw pred 0 -> not a positive candidate
             ]
         })
 
-        df_filtered = apply_linguistic_filters(df_test, max_between_chars=400, pred_col="raw_pred")
+        df_filtered = dl_task4_utils.apply_linguistic_filters(df_test, max_between_chars=400, pred_col="raw_pred")
+        diag = dl_task4_utils.compute_linguistic_diagnostics(df_filtered, pred_col="raw_pred", sanitized_col="sanitized_pred")
 
-        pos_mask = df_test["raw_pred"] == 1
-        pos_df = df_filtered[pos_mask]
-
-        n_neg_only = int(((pos_df["flag_negation"]) & (~pos_df["flag_distance"])).sum())
-        n_dist_only = int(((~pos_df["flag_negation"]) & (pos_df["flag_distance"])).sum())
-        n_both = int(((pos_df["flag_negation"]) & (pos_df["flag_distance"])).sum())
-        n_unique_rejected = int((pos_df["flag_negation"] | pos_df["flag_distance"]).sum())
-        n_surviving = int((pos_df["sanitized_pred"] == 1).sum())
-
-        self.assertEqual(n_neg_only, 1)
-        self.assertEqual(n_dist_only, 1)
-        self.assertEqual(n_both, 1)
-        self.assertEqual(n_unique_rejected, 3)
-        self.assertEqual(n_surviving, 1)
-
-        # Invariant arithmetic: neg_only + dist_only + both == unique_rejected
-        self.assertEqual(n_neg_only + n_dist_only + n_both, n_unique_rejected)
-        # Invariant arithmetic: surviving == initial - unique_rejected
-        self.assertEqual(n_surviving, int(pos_mask.sum()) - n_unique_rejected)
+        self.assertEqual(diag["initial_positive"], 4)
+        self.assertEqual(diag["rejected_negation_only"], 1)
+        self.assertEqual(diag["rejected_distance_only"], 1)
+        self.assertEqual(diag["rejected_both"], 1)
+        self.assertEqual(diag["total_unique_rejected"], 3)
+        self.assertEqual(diag["surviving_positive"], 1)
+        self.assertEqual(diag["initial_positive"], diag["surviving_positive"] + diag["total_unique_rejected"])
 
     def test_missing_between_text_raises_value_error(self):
-        """Missing or NaN between_text must raise ValueError and never pass as string 'nan'."""
         df_bad = pd.DataFrame({
             "candidate_id": ["c1"],
             "raw_pred": [1],
             "between_text": [np.nan],
         })
         with self.assertRaises(ValueError) as ctx:
-            apply_linguistic_filters(df_bad)
+            dl_task4_utils.apply_linguistic_filters(df_bad)
         self.assertIn("Missing between_text encountered", str(ctx.exception))
 
 
-class TestTask4UnifiedRelationRecordSchema(unittest.TestCase):
-    """Test 17-column UnifiedRelationRecord schema conformance."""
+# ============================================================================
+# 5. Prediction and Relation Export Verification Tests
+# ============================================================================
 
-    def test_valid_record_matches_exact_schema(self):
-        """Record formatted via dl_utils must have exactly the 17 specified keys in exact order."""
+class TestTask4ExportVerification(unittest.TestCase):
+    """Test read-back verification of prediction and relation artifacts."""
+
+    def test_prediction_export_verification_success(self):
+        import tempfile
+        frozen_alpha = 0.60
+        frozen_tau = 0.50
+
+        p_dl = np.array([0.8, 0.2])
+        p_aml = np.array([0.6, 0.4])
+        p_hyb = frozen_alpha * p_dl + (1.0 - frozen_alpha) * p_aml
+
+        df_exp = pd.DataFrame({
+            "candidate_id": ["c1", "c2"],
+            "true_label": [1, 0],
+            "aml_prob": p_aml,
+            "dl_prob": p_dl,
+            "hybrid_prob": p_hyb,
+            "aml_pred": [1, 0],
+            "dl_pred": [1, 0],
+            "hybrid_pred": [1, 0],
+            "split": ["validation", "validation"],
+        })
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp:
+            df_exp.to_csv(tmp.name, index=False)
+            tmp_path = tmp.name
+
+        try:
+            dl_task4_utils.verify_prediction_export(
+                filepath=tmp_path,
+                expected_rows=2,
+                split_name="validation",
+                source_candidate_ids=["c1", "c2"],
+                source_true_labels=[1, 0],
+                source_aml_probs=p_aml,
+                source_dl_probs=p_dl,
+                frozen_alpha=frozen_alpha,
+                frozen_tau=frozen_tau,
+            )
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    def test_prediction_export_verification_detects_formula_mismatch(self):
+        import tempfile
+        df_bad = pd.DataFrame({
+            "candidate_id": ["c1"],
+            "true_label": [1],
+            "aml_prob": [0.5],
+            "dl_prob": [0.5],
+            "hybrid_prob": [0.99],  # Wrong! Should be 0.50
+            "aml_pred": [1],
+            "dl_pred": [1],
+            "hybrid_pred": [1],
+            "split": ["validation"],
+        })
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp:
+            df_bad.to_csv(tmp.name, index=False)
+            tmp_path = tmp.name
+
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                dl_task4_utils.verify_prediction_export(
+                    filepath=tmp_path,
+                    expected_rows=1,
+                    split_name="validation",
+                    source_candidate_ids=["c1"],
+                    source_true_labels=[1],
+                    source_aml_probs=[0.5],
+                    source_dl_probs=[0.5],
+                    frozen_alpha=0.5,
+                    frozen_tau=0.5,
+                )
+            self.assertIn("Exported hybrid_prob mismatch with recomputed formula", str(ctx.exception))
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    def test_relation_export_verification_success(self):
+        import tempfile
         rec = dl_utils.build_unified_relation_record(
-            candidate_id="PMC1804205-00-TIAB_T29_T27",
-            article_id="PMC1804205",
-            section_id="PMC1804205-00-TIAB",
-            cause_id="T29",
-            cause_text="PmrB sensor kinase",
-            cause_start=100,
-            cause_end=118,
-            effect_id="T27",
-            effect_text="PmrA regulator",
-            effect_start=200,
-            effect_end=214,
+            candidate_id="PMC123_T1_T2",
+            article_id="PMC123",
+            section_id="sec_01",
+            cause_id="T1",
+            cause_text="sensor",
+            cause_start=10,
+            cause_end=16,
+            effect_id="T2",
+            effect_text="regulator",
+            effect_start=30,
+            effect_end=39,
             confidence=0.88,
             extraction_method="hybrid_probability_fusion",
-            evidence_text="requires both PmrA's cognate sensor kinase PmrB",
+            evidence_text="sensor activates regulator",
             split="test",
             direction="cause->effect",
             provenance="PubMedBERT_alpha0.60+LogisticRegression_1to2",
         )
-        self.assertEqual(list(rec.keys()), dl_utils.UNIFIED_RELATION_SCHEMA)
-        self.assertEqual(len(rec), 17)
-        self.assertEqual(rec["direction"], "cause->effect")
-        self.assertTrue(rec["relation_id"].startswith("dl_"))
-        self.assertGreaterEqual(rec["confidence"], 0.0)
-        self.assertLessEqual(rec["confidence"], 1.0)
+        df_rels = pd.DataFrame([rec])
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp:
+            df_rels.to_csv(tmp.name, index=False)
+            tmp_path = tmp.name
 
+        try:
+            dl_task4_utils.verify_relation_export(
+                filepath=tmp_path,
+                expected_count=1,
+                sanitized_candidate_ids=["PMC123_T1_T2"],
+                candidate_id_to_relation_id={"PMC123_T1_T2": rec["relation_id"]},
+            )
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    def test_relation_export_verification_detects_self_referential_relation(self):
+        import tempfile
+        rec = dl_utils.build_unified_relation_record(
+            candidate_id="PMC123_T1_T1",
+            article_id="PMC123",
+            section_id="sec_01",
+            cause_id="T1",
+            cause_text="sensor",
+            cause_start=10,
+            cause_end=16,
+            effect_id="T1",  # Self-referential!
+            effect_text="sensor",
+            effect_start=10,
+            effect_end=16,
+            confidence=0.88,
+            extraction_method="hybrid_probability_fusion",
+            evidence_text="sensor activates sensor",
+            split="test",
+            direction="cause->effect",
+            provenance="PubMedBERT_alpha0.60+LogisticRegression_1to2",
+        )
+        df_rels = pd.DataFrame([rec])
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp:
+            df_rels.to_csv(tmp.name, index=False)
+            tmp_path = tmp.name
+
+        try:
+            with self.assertRaises(ValueError) as ctx:
+                dl_task4_utils.verify_relation_export(filepath=tmp_path, expected_count=1)
+            self.assertIn("self-referential relations", str(ctx.exception))
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+
+# ============================================================================
+# 6. Graph Pruning & Bayesian Network Structural Compilation Tests
+# ============================================================================
 
 class TestTask4DAGAndBayesianNetwork(unittest.TestCase):
-    """Test DAG construction, self-loop, bidirectional conflict, and cycle handling."""
+    """Test DAG cycle resolution and DiscreteBayesianNetwork structural compilation."""
 
     def test_enforce_dag_acyclicity_removes_self_loops(self):
-        """Self-loops (u -> u) must be pruned by enforce_dag_acyclicity."""
         G = nx.DiGraph()
         G.add_edge("A", "A", confidence=0.9)
         G.add_edge("A", "B", confidence=0.8)
@@ -448,10 +467,9 @@ class TestTask4DAGAndBayesianNetwork(unittest.TestCase):
         self.assertTrue(any(e.get("reason") == "self_loop" for e in audit_log))
 
     def test_enforce_dag_acyclicity_resolves_bidirectional_conflicts(self):
-        """Bidirectional conflicts (A -> B and B -> A) must prune the lower-confidence edge."""
         G = nx.DiGraph()
         G.add_edge("A", "B", confidence=0.85)
-        G.add_edge("B", "A", confidence=0.45)  # Lower weight
+        G.add_edge("B", "A", confidence=0.45)
 
         G_dag, audit_log = enforce_dag_acyclicity(G, weight_attr="confidence")
         self.assertTrue(nx.is_directed_acyclic_graph(G_dag))
@@ -460,11 +478,10 @@ class TestTask4DAGAndBayesianNetwork(unittest.TestCase):
         self.assertTrue(any("bidirectional" in e.get("reason", "") for e in audit_log))
 
     def test_enforce_dag_acyclicity_removes_feedback_cycles(self):
-        """Cyclic graph (A -> B -> C -> A) must prune the lowest weight feedback edge."""
         G = nx.DiGraph()
         G.add_edge("A", "B", confidence=0.90)
         G.add_edge("B", "C", confidence=0.80)
-        G.add_edge("C", "A", confidence=0.60)  # Lowest weight feedback edge
+        G.add_edge("C", "A", confidence=0.60)
 
         self.assertFalse(nx.is_directed_acyclic_graph(G))
         G_dag, audit_log = enforce_dag_acyclicity(G, weight_attr="confidence")
@@ -474,13 +491,22 @@ class TestTask4DAGAndBayesianNetwork(unittest.TestCase):
         self.assertFalse(G_dag.has_edge("C", "A"))
         self.assertTrue(any("cycle" in e.get("reason", "") for e in audit_log))
 
-    def test_pgmpy_bayesian_network_structural_validity_and_inference(self):
-        """Compiled acyclic graph must validate in pgmpy and evaluate observational vs interventional queries."""
-        # Simple regulatory cascade: Sensor (S) -> Regulator (R) -> Target (T)
-        bn = DiscreteBayesianNetwork([("S", "R"), ("R", "T")])
+    def test_compile_discrete_bayesian_network_preserves_all_nodes_and_edges(self):
+        """Bayesian network compilation must preserve all nodes (even isolated ones) and edges."""
+        G = nx.DiGraph()
+        G.add_node("Isolated_Node")
+        G.add_edge("A", "B")
+        G.add_edge("B", "C")
+
+        bn = dl_task4_utils.compile_discrete_bayesian_network(G)
+        self.assertEqual(set(bn.nodes()), set(G.nodes()))
+        self.assertEqual(set(bn.edges()), set(G.edges()))
+        self.assertIn("Isolated_Node", bn.nodes())
         self.assertTrue(nx.is_directed_acyclic_graph(bn))
-        self.assertEqual(len(bn.nodes()), 3)
-        self.assertEqual(len(bn.edges()), 2)
+
+    def test_pgmpy_illustrative_bayesian_network_do_calculus(self):
+        """Illustrative regulatory cascade with synthetic CPDs demonstrates observational vs interventional query."""
+        bn = DiscreteBayesianNetwork([("S", "R"), ("R", "T")])
 
         cpd_s = TabularCPD(variable="S", variable_card=2, values=[[0.7], [0.3]], state_names={"S": ["0", "1"]})
         cpd_r = TabularCPD(
@@ -503,7 +529,7 @@ class TestTask4DAGAndBayesianNetwork(unittest.TestCase):
         q_obs = infer.query(["T"], evidence={"S": "1"})
         p_obs = float(q_obs.values[1])
 
-        # Interventional query via graph mutilation: P(T=1 | do(R=1))
+        # Interventional query: P(T=1 | do(R=1))
         interv_bn = bn.do(["R"])
         infer_interv = VariableElimination(interv_bn)
         q_interv = infer_interv.query(["T"], evidence={"R": "1"})

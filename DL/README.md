@@ -22,7 +22,7 @@ Phase 2 advances beyond Phase 1's classical machine learning extractors by fine-
 flowchart TD
     subgraph S1["1. Data Ingestion & Preprocessing (DL_01)"]
         D1["Corr2Cause Canonical CSVs<br/>Train: 205,734 | Val: 1,076 | Test: 1,162"] --> P1["Premise-Hypothesis Tokenizer Formatter"]
-        D2["BioCause Candidates<br/>12 Train / 4 Val / 4 Test Articles"] --> P2["Argument Boundary Marker Injection<br/>[E1] Arg1 [/E1] ... [E2] Arg2 [/E2]<br/>(Dynamic Pos Weight ≈ 15.24)"]
+        D2["BioCause Candidates<br/>12 Train / 4 Val / 4 Test Articles"] --> P2["Argument Boundary Marker Injection<br/>[E1] Arg1 [/E1] ... [E2] Arg2 [/E2]<br/>(Dynamic Pos Weight ≈ 14.99)"]
     end
 
     subgraph S2["2. Transformer Fine-Tuning"]
@@ -70,7 +70,7 @@ A fundamental architectural constraint of this repository is the complete operat
 
 | Notebook | Scope & Core Technical Responsibilities |
 | :--- | :--- |
-| **`DL_01_data_preparation.ipynb`** | Ingest canonical raw datasets; audit 12/4/4 article-level split isolation (zero cross-split leakage); inject argument boundary markers (`[E1]`, `[/E1]`, `[E2]`, `[/E2]`); compute training dynamic class weight ($w_{\text{pos}} = 9,465 / 621 \approx 15.24$); profile token lengths; serialize model-ready splits. |
+| **`DL_01_data_preparation.ipynb`** | Ingest canonical raw datasets; audit 12/4/4 article-level split isolation (zero cross-split leakage); inject argument boundary markers (`[E1]`, `[/E1]`, `[E2]`, `[/E2]`); compute training dynamic class weight ($w_{\text{pos}} = 9,307 / 621 \approx 14.9871$ from model-eligible candidates); profile token lengths; serialize model-ready splits. |
 | **`DL_02_corr2cause_distilbert.ipynb`** | Fine-tune `distilbert-base-uncased` for Corr2Cause binary causal entailment; format `[CLS] Premise [SEP] Hypothesis [SEP]`; AdamW optimization with FP16; checkpoint selection on validation split; export test predictions. |
 | **`DL_03_biocause_pubmedbert.ipynb`** | Fine-tune `microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext` for BioCause directed relation classification; resize embeddings for special boundary tokens; apply dynamic class-weighted loss; tune classification threshold on validation articles; export test probabilities. |
 | **`DL_04_hybrid_graph_integration.ipynb`** | Ingest AML and PubMedBERT streams; grid-search validation-optimal fusion weight $\alpha^* \in [0, 1]$ and threshold $\tau^*$; apply linguistic negation filtering; format positive predictions into 17-column `UnifiedRelationRecord` schema; compile NetworkX DAG with `enforce_dag_acyclicity`; execute `pgmpy` Bayesian network interventional queries. |
@@ -208,16 +208,21 @@ Weights must **never** be derived using validation or test split labels.
 Linear probability-score fusion combines model estimates:
 $$P_{\text{hybrid}} = \alpha \cdot P_{\text{DL}} + (1 - \alpha) \cdot P_{\text{AML}}$$
 - The blending parameter $\alpha \in [0, 1]$ and decision threshold $\tau$ are selected by sweeping $\alpha$ with step 0.05 strictly on the held-out validation articles (1,884 model-eligible candidate pairs; raw partition contains 1,914 candidate pairs).
-- Test set predictions are evaluated **exactly once** using the frozen validation-selected $\alpha^*$ and $\tau^*$.
+- Optimization uses a lexicographic tie-breaking rule: maximize validation positive-class F1; tie-break on validation Macro-F1; tie-break on smaller $\alpha$, then smaller $\tau$.
+- Test set predictions, test candidate metadata, and test labels are strictly isolated and evaluated **exactly once** using the frozen validation-selected $\alpha^*$ and $\tau^*$.
 - Probability-score fusion is empirically compared against both pure AML ($\alpha = 0$) and pure DL ($\alpha = 1$) baselines.
 
-> **Note**: Raw model probability outputs are not calibrated probabilities unless an explicit calibration method (e.g., Platt scaling, isotonic regression) is applied. The fusion formula operates on raw predicted scores.
+> [!WARNING] Probability Calibration Caveat
+> Linear combination of model scores does not yield formally calibrated posterior probabilities without downstream calibration (e.g., isotonic regression or Platt scaling). The fused values $P_{\text{hybrid}}$ function as ranking and classification decision scores rather than well-calibrated event probabilities.
 
 ### Graph & Bayesian Network Reasoning
 1. **17-Column Schema**: Positive relations are formatted into `UNIFIED_RELATION_SCHEMA` (`relation_id`, `article_id`, `section_id`, `cause_id`, `cause_text`, `cause_start`, `cause_end`, `effect_id`, `effect_text`, `effect_start`, `effect_end`, `direction`, `confidence`, `extraction_method`, `evidence_text`, `provenance`, `split`).
 2. **Deterministic Cycle Breaking**: Extracted edges are processed via `enforce_dag_acyclicity()` from `AML/causal_extractors.py`, which logs and prunes self-loops, resolves bidirectional conflicts, and breaks feedback cycles.
 3. **Causal Interpretation Guardrail**: An acyclic graph is a mathematical topological property, not an absolute guarantee of causal ground truth. Cycle breaking enforces formal mathematical consistency required for Bayesian inference.
-4. **Bayesian Network Intervention**: Compiles acyclic DAGs into `pgmpy` `DiscreteBayesianNetwork` to illustrate observational distributions $P(Y \mid X)$ versus interventional distributions $P(Y \mid do(X))$.
+4. **DAG Compilation vs. Illustrative CPD Boundaries**:
+   - **Structural DAG Compilation**: The extracted acyclic relation graph compiles directly into a `pgmpy.models.DiscreteBayesianNetwork` structure that faithfully preserves all entity nodes (including isolated nodes) and directed edges.
+   - **Parameter Estimation Boundary**: Parameterizing conditional probability distributions (CPDs) for hundreds of biomedical entities requires extensive observational cohort data or deep literature frequency counts. Because such tabular co-occurrence frequencies are not part of the sentence-level extraction task, the compiled DAG represents the verified causal structure.
+   - **Synthetic Interventional Demonstration**: To demonstrate causal inference query capabilities (e.g., comparing observational $P(Y \mid X)$ with interventional $P(Y \mid do(X))$), an illustrative 4-node subnetwork (`A -> B -> C`, `D -> B`) with synthetic binary CPDs is provided separately. This synthetic demonstration must not be confused with empirically validated parameter estimation for the full biomedical graph.
 
 ---
 
@@ -228,7 +233,7 @@ The evaluation pipeline in `DL_05` executes four core ablation studies:
 | Ablation Study | Experimental Configurations | Evaluation Metric | Research Question |
 | :--- | :--- | :--- | :--- |
 | **1. Argument Boundary Markers** | Marked (`[E1]...[E2]`) vs. Unmarked text | Precision, Recall, F1 | Do explicit positional tokens improve bidirectional attention across entity arguments? |
-| **2. Dynamic Loss Weighting** | Weighted ($w_{\text{pos}} \approx 15.24$) vs. Unweighted ($w=1.0$) | Causal Recall, PR-AUC | Does dynamic weighting prevent minority class suppression under 15.24:1 imbalance? |
+| **2. Dynamic Loss Weighting** | Weighted ($w_{\text{pos}} \approx 14.99$) vs. Unweighted ($w=1.0$) | Causal Recall, PR-AUC | Does dynamic weighting prevent minority class suppression under 14.99:1 imbalance? |
 | **3. Ensembling Paradigm** | Pure AML ($\alpha=0$) vs. Pure DL ($\alpha=1$) vs. Hybrid ($\alpha^*$) | F1, Macro-F1, ROC-AUC | Does combining syntactic/lexical rules with contextual transformers outperform single models? |
 | **4. Linguistic Post-Processing** | Hybrid with vs. without negation/distance filters | Edge Precision, False Positives | Does symbolic post-filtering effectively remove false positive causal edges? |
 
