@@ -129,15 +129,21 @@ DL_01_data_preparation.ipynb
     - data/processed/aml_biocause_test_predictions.csv (Phase 1 AML prerequisite, 1,394 rows)
     - data/processed/dl_biocause_validation_predictions.csv (from DL_03, 1,884 rows)
     - data/processed/dl_biocause_test_predictions.csv (from DL_03, 1,394 rows)
+    - data/processed/biocause_candidates.csv (Candidate metadata, 13,408 raw candidates)
+    - data/processed/biocause_relations.csv (Gold relations: 852 total, 100 test)
   Outputs:
-    - data/processed/dl_biocause_hybrid_predictions.csv (17-column UnifiedRelationRecord schema)
-    - Verified acyclic NetworkX DAG and pgmpy Bayesian Network
+    - data/processed/dl_biocause_hybrid_validation_predictions.csv (1,884 rows)
+    - data/processed/dl_biocause_hybrid_test_predictions.csv (1,394 rows)
+    - data/processed/dl_biocause_hybrid_positive_relations.csv (17-column UnifiedRelationRecord schema)
+    - data/processed/dl_biocause_hybrid_dag_edges.csv
+    - data/processed/dl_biocause_fusion_config.json
+    - data/processed/dl_biocause_graph_pruning_diagnostics.json
 
 [DL_05: Comprehensive Evaluation & Ablations]
   Inputs:
     - data/processed/dl_corr2cause_test_predictions.csv (from DL_02)
     - data/processed/dl_biocause_test_predictions.csv (from DL_03)
-    - data/processed/dl_biocause_hybrid_predictions.csv (from DL_04)
+    - data/processed/dl_biocause_hybrid_test_predictions.csv (from DL_04)
     - data/processed/biocause_relations.csv (Gold 100 test relations)
   Outputs:
     - reports/dl_final_benchmark_summary.csv
@@ -162,11 +168,12 @@ candidate_id, true_label, aml_prob, aml_pred, split
 The primary classical classifier designated as the input stream for hybrid integration is **`Logistic Regression (Moderate Weight 1:2)`**, which achieved the highest Phase 1 validation F1 score (55.32% F1 on test). Alternative AML models (such as `Logistic Regression (Unweighted)`, `HistGBT`, and `Random Forest`) are preserved and reported as separate comparative baselines.
 
 ### Reproducible Generation from Phase 1
-The AML classifier is fitted strictly on the training partition ($N = 10,086$) and evaluated to generate held-out validation predictions ($N = 1,914$) and test predictions ($N = 1,408$). If these files are not present in `data/processed/`, they are produced by executing the unchanged Phase 1 classifier pipeline from `AML/AML_04_classical_classifier.ipynb`:
+The primary AML classifier is fitted strictly on the training partition and evaluated to generate candidate-aligned predictions for the model-eligible evaluation splits (Validation: $N = 1,884$, Test: $N = 1,394$, aligned with Task 1–3 model-eligible candidate keys). For reference, the unconstrained raw candidate partitions contain 10,086 train, 1,914 val, and 1,408 test candidates.
+If these prediction files are not present in `data/processed/`, they are produced by executing the unchanged Phase 1 classifier pipeline from `AML/AML_04_classical_classifier.ipynb`:
 1. Load `data/processed/biocause_candidates.csv`.
 2. Extract the identical 10 structural/lexical features and 100 TF-IDF n-grams fitted strictly on the training split.
 3. Fit the primary classifier (`Logistic Regression (Moderate Weight 1:2)`).
-4. Predict probabilities using `predict_proba()` on held-out validation candidates (1,914 rows) and test candidates (1,408 rows).
+4. Predict probabilities using `predict_proba()` on held-out validation candidates (1,884 model-eligible candidates) and test candidates (1,394 model-eligible candidates).
 5. Export with candidate keys (`candidate_id`) to ensure 100% alignment with deep learning predictions.
 
 ---
@@ -181,13 +188,13 @@ The BioCause candidate generation pipeline extracts every co-occurring entity pa
 ### Dynamic Class Imbalance Mitigation
 The candidate generation process results in severe class imbalance:
 - **Raw candidate audit counts**:
-  - **Train split**: 621 positive / 9,465 negative = **15.24:1 negative-to-positive ratio**.
-  - **Validation split**: 131 positive / 1,783 negative = **13.61:1 ratio**.
-  - **Test split**: 100 positive / 1,308 negative = **13.08:1 ratio**.
+  - **Train split**: 621 positive / 9,465 negative = **15.24:1 negative-to-positive ratio** (Total: 10,086).
+  - **Validation split**: 131 positive / 1,783 negative = **13.61:1 ratio** (Total: 1,914).
+  - **Test split**: 100 positive / 1,308 negative = **13.08:1 ratio** (Total: 1,408).
 - **Model-eligible source-verified counts** (excluding 202 invalid reconstructions):
-  - **Train split**: 621 positive / 9,307 negative = **14.99:1 ratio**.
-  - **Validation split**: 131 positive / 1,753 negative = **13.38:1 ratio**.
-  - **Test split**: 100 positive / 1,294 negative = **12.94:1 ratio**.
+  - **Train split**: 621 positive / 9,307 negative = **14.99:1 ratio** (Total: 9,928).
+  - **Validation split**: 131 positive / 1,753 negative = **13.38:1 ratio** (Total: 1,884).
+  - **Test split**: 100 positive / 1,294 negative = **12.94:1 ratio** (Total: 1,394).
 
 To prevent the model from collapsing to the majority negative class, positive class loss weights must be computed dynamically strictly from model-eligible training data:
 $$\text{pos\_weight} = \frac{N_{\text{eligible, train, neg}}}{N_{\text{eligible, train, pos}}} = \frac{9307}{621} \approx 14.9871$$
@@ -200,7 +207,7 @@ Weights must **never** be derived using validation or test split labels.
 ### Validation Discipline
 Linear probability-score fusion combines model estimates:
 $$P_{\text{hybrid}} = \alpha \cdot P_{\text{DL}} + (1 - \alpha) \cdot P_{\text{AML}}$$
-- The blending parameter $\alpha \in [0, 1]$ and decision threshold $\tau$ are selected by sweeping $\alpha$ with step 0.05 strictly on the held-out validation articles (1,914 candidate pairs).
+- The blending parameter $\alpha \in [0, 1]$ and decision threshold $\tau$ are selected by sweeping $\alpha$ with step 0.05 strictly on the held-out validation articles (1,884 model-eligible candidate pairs; raw partition contains 1,914 candidate pairs).
 - Test set predictions are evaluated **exactly once** using the frozen validation-selected $\alpha^*$ and $\tau^*$.
 - Probability-score fusion is empirically compared against both pure AML ($\alpha = 0$) and pure DL ($\alpha = 1$) baselines.
 
