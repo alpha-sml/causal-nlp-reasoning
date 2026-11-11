@@ -391,7 +391,7 @@ def apply_linguistic_filters(
                 "Missing metadata must not be silently coerced to string."
             )
         b_txt = str(raw_val)
-        if b_txt.strip() == "" or b_txt.strip().lower() == "nan":
+        if b_txt == "" or b_txt.strip().lower() == "nan":
             raise ValueError(
                 f"Invalid or empty between_text ('{raw_val}') encountered for candidate {r.get('candidate_id', idx)}. "
                 "Missing metadata must not be silently coerced to string."
