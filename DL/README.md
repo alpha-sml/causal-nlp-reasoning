@@ -125,8 +125,8 @@ DL_01_data_preparation.ipynb
 
 [DL_04: Hybrid Integration & Graph Compilation]
   Inputs:
-    - data/processed/aml_biocause_validation_predictions.csv (Phase 1 AML prerequisite, 1,914 rows)
-    - data/processed/aml_biocause_test_predictions.csv (Phase 1 AML prerequisite, 1,408 rows)
+    - data/processed/aml_biocause_validation_predictions.csv (Phase 1 AML prerequisite, 1,884 rows)
+    - data/processed/aml_biocause_test_predictions.csv (Phase 1 AML prerequisite, 1,394 rows)
     - data/processed/dl_biocause_validation_predictions.csv (from DL_03, 1,884 rows)
     - data/processed/dl_biocause_test_predictions.csv (from DL_03, 1,394 rows)
   Outputs:
@@ -150,8 +150,8 @@ DL_01_data_preparation.ipynb
 ## 6. AML Prediction Export Prerequisite
 
 `DL_04_hybrid_graph_integration.ipynb` requires candidate-aligned AML prediction files:
-- `data/processed/aml_biocause_validation_predictions.csv` (1,914 rows)
-- `data/processed/aml_biocause_test_predictions.csv` (1,408 rows)
+- `data/processed/aml_biocause_validation_predictions.csv` (1,884 rows)
+- `data/processed/aml_biocause_test_predictions.csv` (1,394 rows)
 
 Required columns:
 ```text

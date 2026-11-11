@@ -41,3 +41,11 @@ kaggle.json
 .kaggle/
 *.pem
 *.key
+
+# Streamlit and Viva Demo
+.streamlit/
+.streamlit/*
+.streamlit/config.toml
+demo/
+app.py
+DEMO_README.md
