@@ -79,32 +79,94 @@ def validate_dual_stream_alignment(
 # 2. Authoritative Model-Eligible Membership & Metadata Isolation
 # ============================================================================
 
-def load_authoritative_eligible_candidate_ids(
-    split_manifest_path: Union[str, Path],
+def validate_and_load_authoritative_manifest(
+    manifest_path: Union[str, Path],
     split_name: str,
-    expected_count: int,
-) -> Set[str]:
-    """Load authoritative model-eligible candidate IDs from Task 1 prepared split file.
-    
-    Raises FileNotFoundError with a clear message if the file is unavailable.
-    """
-    path = Path(split_manifest_path)
+    expected_total: int,
+    expected_pos: Optional[int] = None,
+    expected_neg: Optional[int] = None,
+) -> pd.DataFrame:
+    """Validate and load an authoritative Task 1 model-eligible candidate split manifest."""
+    path = Path(manifest_path)
     if not path.is_file():
         raise FileNotFoundError(
             f"Authoritative Task 1 prepared {split_name} split file not found: {path}.\n"
             f"In strict adherence to requirements, expected candidate IDs must not be "
             f"inferred or fabricated."
         )
+
     df = pd.read_csv(path)
     if "candidate_id" not in df.columns:
         raise ValueError(f"Manifest {path} missing required 'candidate_id' column")
-    cand_ids = set(df["candidate_id"].astype(str))
-    if len(df) != expected_count or len(cand_ids) != expected_count:
-        raise ValueError(
-            f"Authoritative {split_name} split count mismatch in {path}: "
-            f"expected {expected_count}, got {len(df)} rows ({len(cand_ids)} unique IDs)"
-        )
-    return cand_ids
+
+    # Reject null, empty, or duplicate candidate IDs
+    if df["candidate_id"].isna().any():
+        raise ValueError(f"Manifest {path} contains null candidate_id values")
+    cids = df["candidate_id"].astype(str).str.strip()
+    if (cids == "").any():
+        raise ValueError(f"Manifest {path} contains empty candidate_id values")
+    if cids.duplicated().any():
+        n_dup = int(cids.duplicated().sum())
+        raise ValueError(f"Manifest {path} contains {n_dup} duplicate candidate_id values")
+
+    # Validate exact expected row count and unique ID count
+    if len(df) != expected_total:
+        raise ValueError(f"Manifest {path} row count mismatch: expected {expected_total}, got {len(df)}")
+    if len(cids.unique()) != expected_total:
+        raise ValueError(f"Manifest {path} unique candidate_id count mismatch: expected {expected_total}, got {len(cids.unique())}")
+
+    # Validate split identity if manifest includes a split field
+    if "split" in df.columns:
+        valid_split_names = {split_name}
+        if split_name in ("val", "validation"):
+            valid_split_names = {"val", "validation"}
+        elif split_name in ("test",):
+            valid_split_names = {"test"}
+        elif split_name in ("train", "training"):
+            valid_split_names = {"train", "training"}
+
+        splits_in_manifest = set(df["split"].astype(str).str.strip().unique())
+        if not splits_in_manifest.issubset(valid_split_names):
+            raise ValueError(f"Manifest {path} contains unexpected split values: {splits_in_manifest} (expected {valid_split_names})")
+
+    # Validate binary labels and expected positive/negative counts if label column exists
+    label_col = None
+    for cand_col in ["label", "true_label"]:
+        if cand_col in df.columns:
+            label_col = cand_col
+            break
+
+    if label_col is not None:
+        if not set(df[label_col].unique()).issubset({0, 1}):
+            raise ValueError(f"Manifest {path} contains non-binary values in '{label_col}': {set(df[label_col].unique())}")
+        if expected_pos is not None:
+            actual_pos = int((df[label_col] == 1).sum())
+            if actual_pos != expected_pos:
+                raise ValueError(f"Manifest {path} positive count mismatch: expected {expected_pos}, got {actual_pos}")
+        if expected_neg is not None:
+            actual_neg = int((df[label_col] == 0).sum())
+            if actual_neg != expected_neg:
+                raise ValueError(f"Manifest {path} negative count mismatch: expected {expected_neg}, got {actual_neg}")
+
+    return df
+
+
+def load_authoritative_eligible_candidate_ids(
+    split_manifest_path: Union[str, Path],
+    split_name: str,
+    expected_count: int,
+    expected_pos: Optional[int] = None,
+    expected_neg: Optional[int] = None,
+) -> Set[str]:
+    """Load authoritative model-eligible candidate IDs from Task 1 prepared split file."""
+    df = validate_and_load_authoritative_manifest(
+        manifest_path=split_manifest_path,
+        split_name=split_name,
+        expected_total=expected_count,
+        expected_pos=expected_pos,
+        expected_neg=expected_neg,
+    )
+    return set(df["candidate_id"].astype(str).values)
 
 
 def validate_exact_eligible_membership(
@@ -129,29 +191,41 @@ def validate_exact_eligible_membership(
 def load_split_candidate_metadata(
     metadata_path: Union[str, Path],
     split_name: str,
+    usecols: Optional[Sequence[str]] = None,
     chunksize: int = 1000,
 ) -> pd.DataFrame:
-    """Stream and filter candidate metadata, loading and retaining only the requested split.
+    """Stream and filter candidate metadata, loading and retaining only the requested split records.
     
-    Guarantees that other splits' candidate records and labels are never retained in memory.
+    Guarantees that non-matching split records, metadata, and labels are never retained in memory.
+    If usecols is provided, only those specific columns are loaded.
     """
     path = Path(metadata_path)
     if not path.is_file():
         raise FileNotFoundError(f"Candidate metadata file not found: {path}")
 
+    load_cols = None
+    drop_split_after = False
+    if usecols is not None:
+        load_cols = list(usecols)
+        if "split" not in load_cols:
+            load_cols.append("split")
+            drop_split_after = True
+
     chunks = []
-    for chunk in pd.read_csv(path, keep_default_na=False, chunksize=chunksize):
+    for chunk in pd.read_csv(path, usecols=load_cols, keep_default_na=False, chunksize=chunksize):
         if "split" not in chunk.columns:
             raise ValueError(f"Metadata file {path} missing required 'split' column")
         matching = chunk[chunk["split"] == split_name]
         if not matching.empty:
+            if drop_split_after:
+                matching = matching.drop(columns=["split"])
             chunks.append(matching)
 
     if not chunks:
         raise ValueError(f"No candidates found for split '{split_name}' in {path}")
 
     df_split = pd.concat(chunks, ignore_index=True)
-    if not (df_split["split"] == split_name).all():
+    if not drop_split_after and not (df_split["split"] == split_name).all():
         raise ValueError(f"Internal error: Leaked non-{split_name} split records during metadata loading!")
     return df_split
 
@@ -168,7 +242,7 @@ def validate_metadata_split_and_label_integrity(
         raise ValueError("Metadata contains null or empty candidate_id values")
     if df_meta_split["candidate_id"].duplicated().any():
         raise ValueError("Metadata contains duplicate candidate_id values")
-    if not (df_meta_split["split"] == split_name).all():
+    if "split" in df_meta_split.columns and not (df_meta_split["split"] == split_name).all():
         raise ValueError(f"Metadata contains non-{split_name} split rows!")
 
     meta_indexed = df_meta_split.set_index("candidate_id")
@@ -178,7 +252,8 @@ def validate_metadata_split_and_label_integrity(
     if missing_ids:
         raise ValueError(f"[{split_name}] {len(missing_ids)} prediction candidate IDs not found in {split_name} metadata")
 
-    meta_labels = meta_indexed.loc[pred_ids, "label"].values
+    label_col = "label" if "label" in meta_indexed.columns else "true_label"
+    meta_labels = meta_indexed.loc[pred_ids, label_col].values
     if not (df_pred["true_label"].values == meta_labels).all():
         mismatched_labels = int(np.sum(df_pred["true_label"].values != meta_labels))
         raise ValueError(f"[{split_name}] {mismatched_labels} candidate labels disagree with metadata")
@@ -316,6 +391,11 @@ def apply_linguistic_filters(
                 "Missing metadata must not be silently coerced to string."
             )
         b_txt = str(raw_val)
+        if b_txt.strip() == "" or b_txt.strip().lower() == "nan":
+            raise ValueError(
+                f"Invalid or empty between_text ('{raw_val}') encountered for candidate {r.get('candidate_id', idx)}. "
+                "Missing metadata must not be silently coerced to string."
+            )
         is_neg = bool(NEGATION_PATTERN.search(b_txt))
         is_dist = len(b_txt) > max_between_chars
 
@@ -387,6 +467,8 @@ def verify_prediction_export(
     source_dl_probs: Sequence[float],
     frozen_alpha: float,
     frozen_tau: float,
+    source_aml_preds: Optional[Sequence[int]] = None,
+    source_dl_preds: Optional[Sequence[int]] = None,
     rtol: float = 1e-5,
     atol: float = 1e-5,
     include_sanitized_col: bool = False,
@@ -402,7 +484,7 @@ def verify_prediction_export(
     if len(df_exp) != expected_rows:
         raise ValueError(f"[{split_name} Export] Row count mismatch: expected {expected_rows}, got {len(df_exp)}")
 
-    # 2. Required columns
+    # 2. Required columns and schema
     base_cols = ["candidate_id", "true_label", "aml_prob", "dl_prob", "hybrid_prob", "aml_pred", "dl_pred", "hybrid_pred", "split"]
     if include_sanitized_col:
         base_cols.append("sanitized_pred")
@@ -417,13 +499,18 @@ def verify_prediction_export(
         if df_exp[col].dtype == object and (df_exp[col].astype(str).str.strip() == "").any():
             raise ValueError(f"[{split_name} Export] Found empty string values in column '{col}'")
 
-    # 4. Candidate IDs match source exactly in same order
+    # 4. Candidate IDs: no duplicates, non-empty, and match source exactly in same order
+    if df_exp["candidate_id"].duplicated().any():
+        n_dup = int(df_exp["candidate_id"].duplicated().sum())
+        raise ValueError(f"[{split_name} Export] Found {n_dup} duplicate candidate_id values")
     if not (df_exp["candidate_id"].astype(str).values == np.array(source_candidate_ids).astype(str)).all():
         raise ValueError(f"[{split_name} Export] Candidate ID ordering or content mismatch with source")
 
-    # 5. True labels match source
+    # 5. True labels match source and are binary
     if not (df_exp["true_label"].values == np.array(source_true_labels)).all():
         raise ValueError(f"[{split_name} Export] True labels do not match source labels")
+    if not set(df_exp["true_label"].unique()).issubset({0, 1}):
+        raise ValueError(f"[{split_name} Export] Non-binary values in true_label")
 
     # 6. Probabilities finite and within [0, 1]
     for p_col in ["aml_prob", "dl_prob", "hybrid_prob"]:
@@ -432,25 +519,45 @@ def verify_prediction_export(
         if not df_exp[p_col].between(0.0, 1.0).all():
             raise ValueError(f"[{split_name} Export] Values outside [0.0, 1.0] in {p_col}")
 
-    # 7. Independent recomputation of fusion formula
-    dl_p = df_exp["dl_prob"].values
-    aml_p = df_exp["aml_prob"].values
-    recomputed_hybrid = frozen_alpha * dl_p + (1.0 - frozen_alpha) * aml_p
-    if not np.allclose(df_exp["hybrid_prob"].values, recomputed_hybrid, rtol=rtol, atol=atol):
-        max_diff = float(np.max(np.abs(df_exp["hybrid_prob"].values - recomputed_hybrid)))
-        raise ValueError(f"[{split_name} Export] Exported hybrid_prob mismatch with recomputed formula! Max diff: {max_diff}")
+    # 7. Compare exported AML and DL probabilities directly against source arrays
+    src_aml_p = np.array(source_aml_probs, dtype=float)
+    src_dl_p = np.array(source_dl_probs, dtype=float)
+    if not np.allclose(df_exp["aml_prob"].values, src_aml_p, rtol=rtol, atol=atol):
+        max_diff = float(np.max(np.abs(df_exp["aml_prob"].values - src_aml_p)))
+        raise ValueError(f"[{split_name} Export] Exported aml_prob does not match source AML probabilities! Max diff: {max_diff}")
+    if not np.allclose(df_exp["dl_prob"].values, src_dl_p, rtol=rtol, atol=atol):
+        max_diff = float(np.max(np.abs(df_exp["dl_prob"].values - src_dl_p)))
+        raise ValueError(f"[{split_name} Export] Exported dl_prob does not match source DL probabilities! Max diff: {max_diff}")
 
-    # 8. Predictions are binary and equal (hybrid_prob >= frozen_tau).astype(int)
+    # 8. Independent recomputation of fusion formula from SOURCE arrays
+    recomputed_from_source = frozen_alpha * src_dl_p + (1.0 - frozen_alpha) * src_aml_p
+    if not np.allclose(df_exp["hybrid_prob"].values, recomputed_from_source, rtol=rtol, atol=atol):
+        max_diff = float(np.max(np.abs(df_exp["hybrid_prob"].values - recomputed_from_source)))
+        raise ValueError(f"[{split_name} Export] Exported hybrid_prob mismatch with source-recomputed formula! Max diff: {max_diff}")
+
+    # 9. Predictions are binary and match
     for pred_col in ["aml_pred", "dl_pred", "hybrid_pred"]:
         if not set(df_exp[pred_col].unique()).issubset({0, 1}):
             raise ValueError(f"[{split_name} Export] Non-binary values in {pred_col}")
+
+    if source_aml_preds is not None:
+        if not (df_exp["aml_pred"].values == np.array(source_aml_preds, dtype=int)).all():
+            raise ValueError(f"[{split_name} Export] Exported aml_pred does not match source aml_pred array")
+
+    if source_dl_preds is not None:
+        if not (df_exp["dl_pred"].values == np.array(source_dl_preds, dtype=int)).all():
+            raise ValueError(f"[{split_name} Export] Exported dl_pred does not match source dl_pred array")
 
     expected_hybrid_pred = (df_exp["hybrid_prob"].values >= frozen_tau).astype(int)
     if not (df_exp["hybrid_pred"].values == expected_hybrid_pred).all():
         mismatched = int(np.sum(df_exp["hybrid_pred"].values != expected_hybrid_pred))
         raise ValueError(f"[{split_name} Export] hybrid_pred does not match (hybrid_prob >= frozen_tau) for {mismatched} rows")
 
-    # 9. Split column
+    if include_sanitized_col:
+        if not set(df_exp["sanitized_pred"].unique()).issubset({0, 1}):
+            raise ValueError(f"[{split_name} Export] Non-binary values in sanitized_pred")
+
+    # 10. Split column
     if not (df_exp["split"] == split_name).all():
         raise ValueError(f"[{split_name} Export] Split column contains values other than '{split_name}'")
 
@@ -460,25 +567,32 @@ def verify_prediction_export(
 def verify_relation_export(
     filepath: Union[str, Path],
     expected_count: int,
-    sanitized_candidate_ids: Optional[Sequence[Any]] = None,
+    sanitized_candidate_ids: Sequence[Any],
+    traceability_map: Optional[Dict[str, str]] = None,
     candidate_id_to_relation_id: Optional[Dict[str, str]] = None,
 ) -> pd.DataFrame:
-    """Read back and verify the 17-column UnifiedRelationRecord export."""
+    """Read back and verify the 17-column UnifiedRelationRecord export with independent candidate traceability."""
+    if traceability_map is None and candidate_id_to_relation_id is not None:
+        traceability_map = candidate_id_to_relation_id
     path = Path(filepath)
     if not path.is_file():
         raise FileNotFoundError(f"Exported relation file not found: {path}")
 
     df_rels = pd.read_csv(path)
 
-    # 1. Exact schema and column order
+    # 1. Exact schema and column order against UNIFIED_RELATION_SCHEMA
     if list(df_rels.columns) != dl_utils.UNIFIED_RELATION_SCHEMA:
         raise ValueError(
             f"Relation schema mismatch!\nExpected: {dl_utils.UNIFIED_RELATION_SCHEMA}\nGot: {list(df_rels.columns)}"
         )
 
-    # 2. Count
+    # 2. Relation count matches expected count and sanitized positive candidates count
     if len(df_rels) != expected_count:
         raise ValueError(f"Relation export row count mismatch: expected {expected_count}, got {len(df_rels)}")
+    if len(df_rels) != len(sanitized_candidate_ids):
+        raise ValueError(
+            f"Relation export count ({len(df_rels)}) does not match sanitized positive candidates count ({len(sanitized_candidate_ids)})"
+        )
 
     # 3. Required identifier fields non-null and non-empty
     id_fields = ["relation_id", "article_id", "section_id", "cause_id", "effect_id"]
@@ -491,39 +605,59 @@ def verify_relation_export(
         n_dup = int(df_rels["relation_id"].duplicated().sum())
         raise ValueError(f"Found {n_dup} duplicate relation_id values in relation export")
 
-    # 5. Cause and effect IDs are not identical
+    # 5. Cause and effect IDs are not identical (reject self-loops)
     same_entity = df_rels["cause_id"] == df_rels["effect_id"]
     if same_entity.any():
         n_same = int(same_entity.sum())
         raise ValueError(f"Found {n_same} self-referential relations (cause_id == effect_id)")
 
-    # 6. Offsets: finite non-negative integers, ordered correctly
-    for prefix in ["cause", "effect"]:
-        s_col = f"{prefix}_start"
-        e_col = f"{prefix}_end"
-        if (df_rels[s_col] < 0).any() or (df_rels[e_col] < 0).any():
-            raise ValueError(f"Negative offsets found in {prefix} spans")
-        if (df_rels[s_col] >= df_rels[e_col]).any():
-            raise ValueError(f"Invalid span order: {s_col} >= {e_col}")
-
-    # 7. Confidence finite and within [0, 1]
-    if not np.isfinite(df_rels["confidence"]).all() or not df_rels["confidence"].between(0.0, 1.0).all():
-        raise ValueError("Confidence values not finite or outside [0.0, 1.0]")
-
-    # 8. Direction exactly cause->effect
+    # 6. Direction exactly cause->effect
     if not (df_rels["direction"] == "cause->effect").all():
         raise ValueError("Found relation records with direction other than 'cause->effect'")
 
-    # 9. Split == test
+    # 7. Split exactly test
     if not (df_rels["split"] == "test").all():
         raise ValueError("Found relation records with split other than 'test'")
 
-    # 10. Traceability to sanitized positive test predictions
-    if candidate_id_to_relation_id is not None:
-        expected_rel_ids = set(candidate_id_to_relation_id.values())
-        actual_rel_ids = set(df_rels["relation_id"])
-        if expected_rel_ids != actual_rel_ids:
-            raise ValueError("Exported relation IDs do not match traceable relation IDs from sanitized predictions")
+    # 8. Confidence: numeric, finite, within [0.0, 1.0]
+    conf = pd.to_numeric(df_rels["confidence"], errors="coerce")
+    if conf.isna().any() or not np.isfinite(conf).all() or not conf.between(0.0, 1.0).all():
+        raise ValueError("Confidence values not finite or outside [0.0, 1.0]")
+
+    # 9. Offsets: numeric, finite, non-null, integer-valued, non-negative, and start < end
+    offset_cols = ["cause_start", "cause_end", "effect_start", "effect_end"]
+    for col in offset_cols:
+        val_numeric = pd.to_numeric(df_rels[col], errors="coerce")
+        if val_numeric.isna().any() or not np.isfinite(val_numeric).all():
+            raise ValueError(f"Non-numeric, infinite, or null values in offset column '{col}'")
+        if (val_numeric < 0).any():
+            raise ValueError(f"Negative offsets found in column '{col}'")
+        if not val_numeric.apply(lambda x: float(x).is_integer()).all():
+            raise ValueError(f"Fractional offsets found in column '{col}'")
+
+    if (df_rels["cause_start"] >= df_rels["cause_end"]).any():
+        raise ValueError("Invalid cause span order: cause_start >= cause_end")
+    if (df_rels["effect_start"] >= df_rels["effect_end"]).any():
+        raise ValueError("Invalid effect span order: effect_start >= effect_end")
+
+    # 10. Independent candidate traceability
+    expected_rel_ids = {dl_utils.generate_relation_id(str(cid)) for cid in sanitized_candidate_ids}
+    if len(expected_rel_ids) != len(sanitized_candidate_ids):
+        raise ValueError("Collision detected in independent relation ID generation from candidate IDs!")
+
+    actual_rel_ids = set(df_rels["relation_id"].astype(str))
+    if actual_rel_ids != expected_rel_ids:
+        missing = expected_rel_ids - actual_rel_ids
+        extra = actual_rel_ids - expected_rel_ids
+        raise ValueError(
+            f"Relation export candidate traceability mismatch!\n"
+            f"Missing relation IDs: {len(missing)}, Extra relation IDs: {len(extra)}"
+        )
+
+    if traceability_map is not None:
+        map_rel_ids = set(traceability_map.values())
+        if actual_rel_ids != map_rel_ids:
+            raise ValueError("Exported relation IDs do not match provided traceability map!")
 
     return df_rels
 
@@ -550,6 +684,7 @@ def verify_dag_and_pruning_diagnostics(
     G_dag: nx.DiGraph,
     audit_log: List[Dict[str, Any]],
     diag_filepath: Union[str, Path],
+    dag_edges_filepath: Optional[Union[str, Path]] = None,
 ) -> Dict[str, Any]:
     """Verify graph properties and reconcile persisted diagnostics JSON."""
     assert nx.is_directed_acyclic_graph(G_dag), "Final graph G_dag is not a DAG!"
@@ -573,10 +708,30 @@ def verify_dag_and_pruning_diagnostics(
     assert diag["final_dag_edges"] == n_final_edges, "Final DAG edge count mismatch in diagnostics"
     assert diag["pruned_edges_count"] == n_pruned, "Pruned edge count mismatch in diagnostics"
 
+    # Reconcile pruning breakdown with audit log
+    n_self_loops = sum(1 for e in audit_log if e.get("reason") == "self_loop")
+    n_bidirectional = sum(1 for e in audit_log if "bidirectional_conflict" in e.get("reason", ""))
+    n_cycle_feedback = sum(1 for e in audit_log if "cycle" in e.get("reason", ""))
+
+    if "pruning_breakdown" in diag:
+        assert diag["pruning_breakdown"].get("self_loops", 0) == n_self_loops, "Self-loop count mismatch in diagnostics"
+        assert diag["pruning_breakdown"].get("bidirectional_conflicts", 0) == n_bidirectional, "Bidirectional count mismatch in diagnostics"
+        assert diag["pruning_breakdown"].get("directed_cycle_feedback", 0) == n_cycle_feedback, "Cycle feedback count mismatch in diagnostics"
+
     for stage in ["before_pruning", "after_pruning"]:
         metrics = diag["edge_evaluation"][stage]
         for m in ["Precision", "Recall", "F1"]:
             val = metrics[m]
             assert np.isfinite(val) and 0.0 <= val <= 1.0, f"Invalid {m} in edge evaluation: {val}"
+
+    # If dag_edges_filepath is provided, verify against G_dag edges
+    if dag_edges_filepath is not None:
+        p_edges = Path(dag_edges_filepath)
+        if not p_edges.is_file():
+            raise FileNotFoundError(f"Exported DAG edges file not found: {p_edges}")
+        df_edges = pd.read_csv(p_edges)
+        edge_pairs = set(zip(df_edges["source"].astype(str), df_edges["target"].astype(str)))
+        expected_pairs = set((str(u), str(v)) for u, v in G_dag.edges())
+        assert edge_pairs == expected_pairs, "Exported DAG edges CSV does not match NetworkX G_dag edges!"
 
     return diag
