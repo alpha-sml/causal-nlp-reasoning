@@ -58,7 +58,7 @@ A fundamental architectural constraint of this repository is the complete operat
 | **Task Formulation** | Natural Language Inference (Premise $\to$ Hypothesis) | Candidate-conditioned directed relation classification |
 | **Input Representation** | `Premise: ... Hypothesis: ...` | Sentence context with markers: `[E1] Arg1 [/E1] ... [E2] Arg2 [/E2]` |
 | **Target Labels** | Binary: `1` (Entailed), `0` (Refuted) | Binary: `1` (Arg1 causes Arg2), `0` (Arg1 does not cause Arg2) |
-| **Canonical Split Distribution** | Train: 205,734 \| Val: 1,076 \| Test: 1,162 | **Article-level grouping**: 12 train (10,086 cands) \| 4 val (1,914 cands) \| 4 test (1,408 cands) |
+| **Canonical Split Distribution** | Train: 205,734 \| Val: 1,076 \| Test: 1,162 | **Article-level grouping (12 / 4 / 4 articles)**: Raw: 10,086 train / 1,914 val / 1,408 test \| Model-eligible: **9,928** train (`621` pos, `9,307` neg) \| **1,884** val (`131` pos, `1,753` neg) \| **1,394** test (`100` pos, `1,294` neg) |
 | **Downstream Graph** | **Does NOT feed into knowledge graph** | **Feeds directly into NetworkX DAG and pgmpy BN** |
 | **Evaluation Scope** | Standalone benchmark table (Macro-F1, Accuracy) | Standalone relation & graph edge benchmark table (P, R, F1) |
 
@@ -72,9 +72,9 @@ A fundamental architectural constraint of this repository is the complete operat
 | :--- | :--- |
 | **`DL_01_data_preparation.ipynb`** | Ingest canonical raw datasets; audit 12/4/4 article-level split isolation (zero cross-split leakage); inject argument boundary markers (`[E1]`, `[/E1]`, `[E2]`, `[/E2]`); compute training dynamic class weight ($w_{\text{pos}} = 9,307 / 621 \approx 14.9871$ from model-eligible candidates); profile token lengths; serialize model-ready splits. |
 | **`DL_02_corr2cause_distilbert.ipynb`** | Fine-tune `distilbert-base-uncased` for Corr2Cause binary causal entailment; format `[CLS] Premise [SEP] Hypothesis [SEP]`; AdamW optimization with FP16; checkpoint selection on validation split; export test predictions. |
-| **`DL_03_biocause_pubmedbert.ipynb`** | Fine-tune `microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext` for BioCause directed relation classification; resize embeddings for special boundary tokens; apply dynamic class-weighted loss; tune classification threshold on validation articles; export test probabilities. |
-| **`DL_04_hybrid_graph_integration.ipynb`** | Ingest AML and PubMedBERT streams; grid-search validation-optimal fusion weight $\alpha^* \in [0, 1]$ and threshold $\tau^*$; apply linguistic negation filtering; format positive predictions into 17-column `UnifiedRelationRecord` schema; compile NetworkX DAG with `enforce_dag_acyclicity`; execute `pgmpy` Bayesian network interventional queries. |
-| **`DL_05_evaluation_ablation.ipynb`** | Comparative benchmarking (AML vs. DL vs. Hybrid); evaluate separate Corr2Cause and BioCause sections; execute 4-dimensional ablation studies; evaluate graph edge precision/recall/F1 against gold BioCause relations; generate final summary tables and figures in `reports/`. |
+| **`DL_03_biocause_pubmedbert.ipynb`** | Fine-tune `microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext` for BioCause directed relation classification; resize embeddings for special boundary tokens; apply normalized dynamic class-weighted loss; perform joint validation `(epoch_checkpoint, threshold)` selection (`checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0273$); export validation/test probabilities and metrics; persist SafeTensors weights & tokenizer (with standalone Section 10 recovery/verification cell). |
+| **`DL_04_hybrid_graph_integration.ipynb`** | Ingest AML and PubMedBERT streams; grid-search validation-optimal fusion weight $\alpha^* = 0.45$ and threshold $\tau^* = 0.3200$; apply linguistic negation filtering; format positive predictions into 17-column `UnifiedRelationRecord` schema; compile NetworkX DAG with `enforce_dag_acyclicity`; execute `pgmpy` Bayesian network interventional queries; serialize `aml_classifier.pkl` via Joblib and package `DL/models/hybrid_biocause/`. |
+| **`DL_05_evaluation_ablation.ipynb`** | Comparative benchmarking (AML vs. DL vs. Hybrid); evaluate separate Corr2Cause and BioCause sections; execute 4-dimensional ablation studies with joint `(checkpoint, threshold)` validation selection; evaluate graph edge precision/recall/F1 against gold BioCause relations; export final summary tables and figures to `reports/`. |
 
 ---
 
@@ -120,9 +120,10 @@ DL_01_data_preparation.ipynb
     - data/processed/dl_biocause_{train,val,test}.csv
   Outputs:
     - DL/models/biocause_pubmedbert_best/ (validation-selected checkpoint & tokenizer)
+    - DL/models/hybrid_biocause/pubmedbert/ (SafeTensors weights & tokenizer for hybrid bundle)
     - data/processed/dl_biocause_metrics.json (joint epoch & threshold selection metadata)
-    - data/processed/dl_biocause_validation_predictions.csv (1,884 rows; columns: candidate_id, article_id, section_id, arg1_id, arg2_id, true_label, dl_prob, dl_pred, split)
-    - data/processed/dl_biocause_test_predictions.csv (1,394 rows; columns: candidate_id, article_id, section_id, arg1_id, arg2_id, true_label, dl_prob, dl_pred, split)
+    - data/processed/dl_biocause_validation_predictions.csv (1,884 rows; columns: candidate_id, article_id, section_id, arg1_id, arg2_id, true_label, dl_prob, dl_pred, split, arg1_before_arg2)
+    - data/processed/dl_biocause_test_predictions.csv (1,394 rows; columns: candidate_id, article_id, section_id, arg1_id, arg2_id, true_label, dl_prob, dl_pred, split, arg1_before_arg2)
 
 [DL_04: Hybrid Integration & Graph Compilation]
   Inputs:
@@ -140,6 +141,7 @@ DL_01_data_preparation.ipynb
     - data/processed/dl_biocause_hybrid_dag_edges.csv
     - data/processed/dl_biocause_fusion_config.json
     - data/processed/dl_biocause_graph_pruning_diagnostics.json
+    - DL/models/hybrid_biocause/{aml_classifier.pkl,pubmedbert/,fusion_config.json,model_manifest.json,README.md}
 
 [DL_05: Comprehensive Evaluation & Ablations]
   Inputs:
@@ -170,16 +172,16 @@ candidate_id, true_label, aml_prob, aml_pred, split
 ```
 
 ### Primary AML Baseline Model
-The primary classical classifier designated as the input stream for hybrid integration is **`Logistic Regression (Moderate Weight 1:2)`**, which achieved the highest Phase 1 validation F1 score (55.32% F1 on test). Alternative AML models (such as `Logistic Regression (Unweighted)`, `HistGBT`, and `Random Forest`) are preserved and reported as separate comparative baselines.
+The primary classical classifier designated as the input stream for hybrid integration is **`Logistic Regression (Moderate Weight 1:2)`**, which achieved the highest Phase 1 validation F1 score (**55.32%** Pos F1 on the raw test split of `1,408` candidates in Phase 1; **56.22%** Pos F1 at fixed `0.50` and **55.68%** at validation-selected `0.5200` on the model-eligible BioCause test split of `1,394` candidates). Alternative AML models (such as `Logistic Regression (Unweighted)`, `HistGBT`, and `Random Forest`) are preserved and reported as separate comparative baselines in Phase 1.
 
 ### Reproducible Generation from Phase 1
-The primary AML classifier is fitted strictly on the training partition and evaluated to generate candidate-aligned predictions for the model-eligible evaluation splits (Validation: $N = 1,884$, Test: $N = 1,394$, aligned with Task 1–3 model-eligible candidate keys). For reference, the unconstrained raw candidate partitions contain 10,086 train, 1,914 val, and 1,408 test candidates.
-If these prediction files are not present in `data/processed/`, they are produced by executing the unchanged Phase 1 classifier pipeline from `AML/AML_04_classical_classifier.ipynb`:
-1. Load `data/processed/biocause_candidates.csv`.
-2. Extract the identical 10 structural/lexical features and 100 TF-IDF n-grams fitted strictly on the training split.
+The primary AML classifier (`class_weight={0: 1.0, 1: 2.0}, C=1.0, max_iter=200, random_state=42`) is fitted strictly on the raw training partition (`10,086` rows in `biocause_candidates.csv`) and evaluated to generate candidate-aligned predictions for the model-eligible evaluation splits (Validation: $N = 1,884$, Test: $N = 1,394$, aligned with Task 1–3 model-eligible candidate keys). For reference, the unconstrained raw candidate partitions contain `10,086` train, `1,914` val, and `1,408` test candidates.
+If these prediction files are not present in `data/processed/`, they are produced by executing the unchanged Phase 1 classifier pipeline from `AML/AML_04_classical_classifier.ipynb` and `AML/AML_05_integration_evaluation.ipynb`:
+1. Load `data/processed/biocause_candidates.csv` (`keep_default_na=False`).
+2. Extract the identical 10 structural/lexical features (`StandardScaler` fitted strictly on train) and 100 TF-IDF unigram/bigram features (`TfidfVectorizer` fitted strictly on `df_train["between_text"]`).
 3. Fit the primary classifier (`Logistic Regression (Moderate Weight 1:2)`).
 4. Predict probabilities using `predict_proba()` on held-out validation candidates (1,884 model-eligible candidates) and test candidates (1,394 model-eligible candidates).
-5. Export with candidate keys (`candidate_id`) to ensure 100% alignment with deep learning predictions.
+5. Export with candidate keys (`candidate_id`) to ensure 100% alignment with deep learning predictions (and serialize the fitted preprocessing + classifier `Pipeline` to `DL/models/hybrid_biocause/aml_classifier.pkl` via `joblib.dump`).
 
 ---
 
@@ -212,8 +214,8 @@ Weights must **never** be derived using validation or test split labels.
 ### Validation Discipline
 Linear probability-score fusion combines model estimates:
 $$P_{\text{hybrid}} = \alpha \cdot P_{\text{DL}} + (1 - \alpha) \cdot P_{\text{AML}}$$
-- The blending parameter $\alpha \in [0, 1]$ and decision threshold $\tau$ are selected by sweeping $\alpha$ with step $0.05$ and candidate thresholds across $[0.01, 0.99]$ plus validation probability quantiles strictly on the held-out validation articles (1,884 model-eligible candidate pairs; raw partition contains 1,914 candidate pairs).
-- Optimization uses a deterministic tie-breaking hierarchy: maximize validation positive-class F1; tie-break on validation Macro-F1; tie-break on smaller $|\tau - 0.50|$, smaller $|\alpha - 0.50|$, smaller $\alpha$, and then higher $\tau$.
+- The blending parameter $\alpha \in [0, 1]$ and decision threshold $\tau$ are selected by sweeping $\alpha$ with step $0.05$ and candidate thresholds across $[0.01, 0.99]$ (in `0.01` increments) combined with validation probability quantiles strictly on the held-out validation articles (1,884 model-eligible candidate pairs; raw partition contains 1,914 candidate pairs).
+- Optimization uses the exact deterministic tie-breaking hierarchy in `DL_04`: maximize validation positive-class F1; tie-break on validation Macro-F1; tie-break on smaller $\alpha$, then threshold closest to `0.50` (smaller $|\tau - 0.50|$), and then higher $\tau$.
 - Test set predictions, test candidate metadata, and test labels are strictly isolated and evaluated **exactly once** using the frozen validation-selected $\alpha^*$ and $\tau^*$.
 - Probability-score fusion is empirically compared against both pure AML ($\alpha = 0$) and pure DL ($\alpha = 1$) baselines.
 
@@ -225,9 +227,9 @@ $$P_{\text{hybrid}} = \alpha \cdot P_{\text{DL}} + (1 - \alpha) \cdot P_{\text{A
 2. **Deterministic Cycle Breaking**: Extracted edges are processed via `enforce_dag_acyclicity()` from `AML/causal_extractors.py`, which logs and prunes self-loops, resolves bidirectional conflicts, and breaks feedback cycles.
 3. **Causal Interpretation Guardrail**: An acyclic graph is a mathematical topological property, not an absolute guarantee of causal ground truth. Text-mined directed relations and topological cycle pruning do not, by themselves, establish empirical causal ground truth; they construct a candidate structural causal model consistent with scientific text expressions. Cycle breaking enforces formal mathematical consistency required for Bayesian inference.
 4. **DAG Compilation vs. Illustrative CPD Boundaries**:
-   - **Structural DAG Compilation**: The extracted acyclic relation graph compiles directly into a `pgmpy.models.DiscreteBayesianNetwork` structure that faithfully preserves all entity nodes (including isolated nodes) and directed edges.
+   - **Structural DAG Compilation**: The extracted acyclic relation graph (`127` nodes, `79` edges) compiles directly into a `pgmpy.models.DiscreteBayesianNetwork` structure that faithfully preserves all entity nodes (including isolated nodes) and directed edges.
    - **Parameter Estimation Boundary**: Parameterizing conditional probability distributions (CPDs) for hundreds of biomedical entities requires extensive observational cohort data or deep literature frequency counts. Because such tabular co-occurrence frequencies are not part of the sentence-level extraction task, the compiled DAG represents the verified causal structure.
-   - **Synthetic Interventional Demonstration**: To demonstrate causal inference query capabilities (e.g., comparing observational $P(Y \mid X)$ with interventional $P(Y \mid do(X))$), an illustrative 4-node subnetwork (`A -> B -> C`, `D -> B`) with synthetic binary CPDs is provided separately. This synthetic demonstration must not be confused with empirically validated parameter estimation for the full biomedical graph.
+   - **Synthetic Interventional Demonstration**: To demonstrate causal inference query capabilities (comparing observational conditioning against interventional $do$-calculus), separate small subnetworks with explicitly labeled synthetic binary CPDs are provided (`Sensor_Kinase / Co_Activator -> Response_Regulator -> Antibiotic_Resistance` in `DL_04` Section 8, and `Sensor -> Regulator -> Resistance` in `DL_05` Section 7). These synthetic demonstrations must not be confused with empirically estimated CPDs on the full biomedical graph.
 
 ---
 
@@ -490,6 +492,25 @@ All candidate-level evaluations strictly preserve the model-eligible test partit
 ### 17.4 Graph Topology & Causal Discovery Benchmark
 - **Gold Directed Causal Edges in Test Split**: `100` edges across `4` test articles
 - **Raw Extracted Edges (Pre-Pruning)**: `86` edges (`TP=53, FP=33, FN=47`, `Precision=0.6163`, `Recall=0.5300`, `F1=0.5699`, `Is DAG: False`)
-- **Acyclic Causal DAG (Post Cycle-Breaking)**: `79` edges (`TP=53, FP=26, FN=47`, `Precision=0.6709`, `Recall=0.5300`, `F1=0.5922`, `Is DAG: True`)
+- **Acyclic Causal DAG (Post Cycle-Breaking)**: `79` edges across `127` nodes (`TP=53, FP=26, FN=47`, `Precision=0.6709`, `Recall=0.5300`, `F1=0.5922`, `Is DAG: True`)
 - **Pruning Audit**: `7` bidirectional conflicts resolved (`0` self-loops, `0` cycle feedback edges) — all `7` removed edges were false positives while preserving all `53` true positives.
-- **Illustrative Bayesian Network Reasoning**: Compiled using `pgmpy.models.DiscreteBayesianNetwork` (`Sensor -> Regulator -> Resistance`) with explicitly synthetic CPDs demonstrating Pearl $do$-calculus (`Baseline P(Resistance=1) = 0.4242`, observational `P(Resistance=1 | Sensor=1) = 0.7200` [`+0.2958`], interventional `P(Resistance=1 | do(Regulator=1)) = 0.8500` [`+0.4258`]).
+- **Empirical Structure vs. Illustrative Synthetic CPDs**: The empirical extracted `G_dag` (`127` nodes, `79` edges) compiles structurally into `pgmpy.models.DiscreteBayesianNetwork`, while the quantitative $do$-calculus examples (`DL_05` Section 7 `Sensor -> Regulator -> Resistance`: `Baseline P(Resistance=1) = 0.4242`, observational `P(Resistance=1 | Sensor=1) = 0.7200` [`+0.2958`], interventional `P(Resistance=1 | do(Regulator=1)) = 0.8500` [`+0.4258`]) use explicitly synthetic CPDs.
+
+---
+
+## 18. Deployable Hybrid Model Package (`DL/models/hybrid_biocause/`) & Persistence Workflow
+
+### Package Structure & `.gitignore` Policy
+The deployable hybrid BioCause bundle is targeted at `DL/models/hybrid_biocause/`:
+- `pubmedbert/`: Frozen PubMedBERT (`checkpoint-3723`, Epoch `3.0`) saved with SafeTensors (`model.safetensors`, `config.json`) and marker-augmented tokenizer (`[E1]`, `[/E1]`, `[E2]`, `[/E2]`), loaded via HuggingFace `from_pretrained()`.
+- `aml_classifier.pkl`: Complete Joblib-serialized sklearn `Pipeline` (`hybrid_inference.BioCauseAMLFeatureExtractor` + `LogisticRegression(class_weight={0: 1.0, 1: 2.0}, C=1.0, max_iter=200, random_state=42)`) fitted strictly on raw training candidates (`10,086` rows).
+- `fusion_config.json`: Frozen validation-selected fusion configuration ($\alpha^* = 0.45$, $\tau^* = 0.3200$, $\tau_{\text{AML}}^* = 0.5200$, $\tau_{\text{DL}}^* = 0.0273$).
+- `model_manifest.json`: Model versions, training hyperparameters, authoritative split counts, and persistence verification status.
+- `README.md`: Loading/inference guide and input/output schema contract (`DL/hybrid_inference.py`).
+
+Because `.gitignore` excludes `models/`, `checkpoints/`, `*.safetensors`, and `*.bin`, large neural weights and serialized binaries remain outside Git tracking and must be generated/verified in Google Colab before packaging/deployment:
+1. Run `DL/DL_03_biocause_pubmedbert.ipynb` Section 9 (`id=0b9968aa`) or standalone Section 10 recovery cell (`id=c94e21b0`) to serialize SafeTensors weights from `checkpoint-3723` on CPU and verify reload + validation sanity inference.
+2. Run `DL/DL_04_hybrid_graph_integration.ipynb` Section 11 (`id=b402e8c3`) and Section 12 (`id=f829a1d7`) to serialize `aml_classifier.pkl`, bundle `pubmedbert/`, verify validation-slice hybrid inference without accessing test labels, and mark `reload_and_inference_verified: true` in `model_manifest.json`.
+
+> [!WARNING] Pickle Security
+> Only load `aml_classifier.pkl` (`joblib.load`) from trusted, verified project outputs. Never serialize HuggingFace transformer models via `pickle` or `joblib`.

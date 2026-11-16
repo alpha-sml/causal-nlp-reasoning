@@ -2,8 +2,9 @@
 
 - **Repository:** `alpha-sml/causal-nlp-reasoning`
 - **Branch:** `main`
+- **Latest Reference Commit:** `7612347059c83f807d08b0f0ff20407e41e84e3f`
 - **Date of Audit:** `2026-11-16`
-- **Status:** COMPLETE & RECONCILED FROM GOOGLE COLAB EXECUTION OUTPUTS
+- **Status:** EVALUATION COMPLETE; MODEL WEIGHT PERSISTENCE & `.pkl` PACKAGING PENDING COLAB VERIFICATION
 
 ---
 
@@ -19,17 +20,19 @@
     "name": "python3"
   }
   ```
-- **Execution Mode:** Manual top-to-bottom sequential execution of all five Deep Learning notebooks (`DL_01` through `DL_05`) in Google Colab in full dependency order, reconciled with static JSON/source inspection of all executed notebook outputs (`DL/dl_utils.py` blob SHA `1844e06924e6b971c749f4453928c66427ccc9fc`).
+- **Execution Mode:** Manual sequential execution of `DL_01` through `DL_05` in Google Colab, combined with static JSON, syntax, and SHA inspection in the local repository (`DL/dl_utils.py` commit `4bf3cddfedadc5c7342c6f5f1f0b04ca7bee7e5a`, blob SHA `1844e06924e6b971c749f4453928c66427ccc9fc`).
+- **Completed vs. Pending Verification Boundary:**
+  - **Completed in Colab:** Training, joint validation `(epoch, threshold)` selection, held-out test evaluation, prediction/metric exports (`dl_corr2cause_test_predictions.csv`, `dl_biocause_*.csv`, `dl_biocause_metrics.json`, `dl_biocause_fusion_config.json`, `dl_biocause_graph_pruning_diagnostics.json`), and `reports/` tables and figures.
+  - **Pending User Colab Verification:** `DL_03`'s final persistence cell (`id=0b9968aa`, Section 9) recorded a kernel crash during `trainer.save_model()` shard writing (`Writing model shards: 0%| | 0/1`) *after* writing prediction CSVs and `dl_biocause_metrics.json`. SafeTensors persistence (`DL_03` Section 9/10 recovery cell `c94e21b0`) and Joblib `aml_classifier.pkl` + `DL/models/hybrid_biocause/` packaging (`DL_04` Section 11/12 cells `b402e8c3`, `f829a1d7`) are prepared in code and await manual Colab execution and reload verification.
 
 ### 2. Notebook Execution Register
-| Notebook | Scope | Total Cells | Code Cells | MD Cells | Outputs Present | Status |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| `DL/DL_01_data_preparation.ipynb` | Tokenization, entity marking, BioCause split manifest creation | 33 | 21 | 12 | 13 | **Executed** |
-| `DL/DL_02_corr2cause_distilbert.ipynb` | DistilBERT fine-tuning and evaluation on Corr2Cause | 14 | 9 | 5 | 16 | **Executed** |
-| `DL/DL_03_biocause_pubmedbert.ipynb` | PubMedBERT fine-tuning, joint epoch/threshold selection, BioCause test | 14 | 9 | 5 | 22 | **Executed** |
-| `DL/DL_04_hybrid_graph_integration.ipynb` | Validation-only fusion grid search, frozen test evaluation, DAG extraction | 18 | 9 | 9 | 8 | **Executed** |
-| `DL/DL_05_evaluation_ablation.ipynb` | Global benchmark evaluation, 4D ablations, causal Bayesian reasoning | 13 | 8 | 5 | 38 | **Executed** |
-| **TOTAL** | | **92** | **56** | **36** | **97** | **All Executed** |
+| Notebook | Scope | Executed Outputs Status | Persistence / Packaging Status |
+| :--- | :--- | :--- | :--- |
+| `DL/DL_01_data_preparation.ipynb` | Tokenization, entity marking, BioCause split manifest creation | **Executed** (`33` cells, `13` outputs) | `dl_{corr2cause,biocause}_{train,val,test}.csv` exported |
+| `DL/DL_02_corr2cause_distilbert.ipynb` | DistilBERT fine-tuning and evaluation on Corr2Cause | **Executed** (`14` cells, `16` outputs) | `dl_corr2cause_test_predictions.csv` exported |
+| `DL/DL_03_biocause_pubmedbert.ipynb` | PubMedBERT fine-tuning, joint epoch/threshold selection, BioCause test | **Eval Executed; Final Save Crashed** (`id=0b9968aa` crashed at shard write after exporting predictions & metrics) | CPU SafeTensors recovery cell (`id=c94e21b0`) pending Colab run |
+| `DL/DL_04_hybrid_graph_integration.ipynb` | Validation fusion grid search, frozen test eval, DAG pruning | **Sections 1–9 Executed** (`8` outputs) | Sections 11–12 (`aml_classifier.pkl` & reload check) pending Colab run |
+| `DL/DL_05_evaluation_ablation.ipynb` | Global benchmark evaluation, 4D ablations, causal Bayesian reasoning | **Executed** (`13` cells, `38` outputs) | Benchmark/ablation CSVs & PNGs extracted to `reports/` |
 
 ---
 
@@ -155,43 +158,63 @@ Key ablation findings:
 
 ---
 
-## D. Static Validation & Integrity Checks
+## D. Validation & Verification Scope (Static Checks vs. Colab Runtime Execution)
 
-| Validation Check | Scope / Assertion | Result |
+### 1. Static Checks Performed Locally (No Code Executed)
+| Validation Check | Scope / Command | Result |
 | :--- | :--- | :---: |
-| Notebook JSON Validation | `jq empty` across all 5 DL notebooks (`DL_01`–`DL_05`) | **Valid JSON (Exit 0)** |
-| Git Whitespace Check | `git diff --check` across working tree | **Clean (Exit 0)** |
+| Notebook & JSON Validation | `jq empty` across `DL_01`–`DL_05`, `fusion_config.json`, `model_manifest.json` | **Valid JSON (Exit 0)** |
+| Python Syntax & Import Audit | Static inspection of `DL/hybrid_inference.py`, `DL_03`, `DL_04` cells vs. `requirements-dl.txt` | **Verified Statically** |
+| Git Whitespace Check | `git diff --check` across modified tracked files | **Clean (Exit 0)** |
 | Shared Utilities Preservation | `git hash-object DL/dl_utils.py` | **`1844e06924e6b971c749f4453928c66427ccc9fc` (Exact Match)** |
-| Candidate ID Alignment | Exact order & label agreement across BioCause val ($N=1,884$) and test ($N=1,394$) in executed Colab assertions | **100% Match (Passed in `DL_04` / `DL_05`)** |
-| Probability Bounds | Finite probabilities in $[0, 1]$ across AML, PubMedBERT, and Hybrid streams | **Verified (Passed in `DL_03`–`DL_05`)** |
-| DAG Acyclicity | `nx.is_directed_acyclic_graph(G_dag)` & edge-count pruning reconciliation (`86 - 7 = 79`) | **`True` (Passed in `DL_04` & `DL_05`)** |
-| Phase 1 Protection | Unmodified `AML/`, `00_setup.ipynb`, `01_eda.ipynb`, `tests/test_phase1_baseline.py`, `requirements.txt` | **Unmodified** |
+| Phase 1 Protection | `AML/`, `00_setup.ipynb`, `01_eda.ipynb`, `tests/test_phase1_baseline.py`, `requirements.txt` | **Unmodified** |
+| `.gitignore` Binary Policy Check | `models/`, `*.safetensors`, `*.bin`, `*.pt`, `*.pth`, `checkpoints/` | **Confirmed Excluded from Git** |
+
+### 2. Runtime Assertions Observed in Executed Colab Notebook Outputs
+| Runtime Check | Executed Notebook Scope | Observed Status |
+| :--- | :--- | :---: |
+| Candidate ID & Label Alignment | BioCause val ($N=1,884$) & test ($N=1,394$) across AML, DL, and Hybrid (`DL_04`, `DL_05`) | **Passed in Colab Outputs** |
+| Probability Bounds $[0, 1]$ | Finite probabilities across all prediction exports (`DL_03`–`DL_05`) | **Passed in Colab Outputs** |
+| DAG Acyclicity & Pruning Audit | `nx.is_directed_acyclic_graph(G_dag)` and `86 - 7 = 79` edge reconciliation (`DL_04`, `DL_05`) | **`True` (Passed in Colab Outputs)** |
+| PubMedBERT SafeTensors Persistence | `DL_03` Section 9 (`id=0b9968aa`) / Section 10 recovery (`id=c94e21b0`) | **Pending User Colab Execution** *(Cell `0b9968aa` crashed during shard writing)* |
+| Hybrid Packaging & Reload Check | `DL_04` Section 11 (`aml_classifier.pkl`, `model_manifest.json`) & Section 12 validation check | **Pending User Colab Execution** |
 
 ---
 
 ## E. Outstanding Issues and Limitations
 
-1. **Synthetic CPDs:** The Bayesian Network demonstration in Section 7 of `DL_05` (`Sensor -> Regulator -> Resistance`) and Section 8 of `DL_04` uses synthetic conditional probability distributions (CPDs) to illustrate Pearl's $do$-calculus and must not be interpreted as empirically estimated biological effect sizes.
-2. **Low Probability Calibration in Weighted PubMedBERT:** Under dynamic positive class weighting ($14.9871\times$), raw softmax probabilities on validation remain compressed (`max = 0.3182`), requiring validation-selected thresholding ($\tau^* = 0.0273$) rather than a naive $0.50$ cutoff.
-3. **Working Tree Status:** All notebook outputs, extracted report artifacts, and reconciled documentation remain unstaged in the local working tree without committing or pushing to Git.
+1. **PubMedBERT Weight Persistence Crash in Committed `DL_03` Output:** Cell `0b9968aa` (Section 9) successfully exported `dl_biocause_test_predictions.csv` and `dl_biocause_metrics.json`, then suffered a Colab kernel crash at `Writing model shards: 0%| | 0/1`. CPU SafeTensors persistence (`model.to('cpu')`, `safe_serialization=True`) and a standalone recovery cell (`DL_03` Section 10, `id=c94e21b0`) have been prepared without retraining and require manual Colab execution and reload verification.
+2. **AML `.pkl` Serialization & Hybrid Package Verification:** Code for `DL/models/hybrid_biocause/aml_classifier.pkl` (`joblib.dump`) and full hybrid reload verification (`DL_04` Sections 11–12, `id=b402e8c3` and `id=f829a1d7`) has been prepared in `DL/hybrid_inference.py` and `DL_04`, and requires manual Colab execution to generate and verify binary weights (not committed due to `.gitignore`).
+3. **Synthetic CPDs:** The Bayesian Network demonstrations (`DL_04` Section 8 4-node subnetwork and `DL_05` Section 7 3-node subnetwork) use explicitly synthetic conditional probability distributions (CPDs) to illustrate Pearl's $do$-calculus and must not be interpreted as empirically estimated biological effect sizes.
+4. **Low Probability Calibration in Weighted PubMedBERT:** Under dynamic positive class weighting ($14.9871\times$), raw softmax probabilities on validation remain compressed (`max = 0.3182`), requiring validation-selected thresholding ($\tau^* = 0.0273$) rather than a naive $0.50$ cutoff.
+5. **Joblib / Pickle Trust Boundary:** `aml_classifier.pkl` uses Joblib serialization and must only be loaded from trusted, project-verified sources (`DL/hybrid_inference.py`).
 
 ---
 
 ## F. Final Deliverables Register
 
-1. **Executed Notebooks:**
+1. **Notebooks (`DL/`):**
    - `DL/DL_01_data_preparation.ipynb`
    - `DL/DL_02_corr2cause_distilbert.ipynb`
-   - `DL/DL_03_biocause_pubmedbert.ipynb`
-   - `DL/DL_04_hybrid_graph_integration.ipynb`
+   - `DL/DL_03_biocause_pubmedbert.ipynb` *(Sections 9–10 updated for CPU SafeTensors persistence & recovery)*
+   - `DL/DL_04_hybrid_graph_integration.ipynb` *(Sections 11–12 added for `aml_classifier.pkl` & hybrid reload check)*
    - `DL/DL_05_evaluation_ablation.ipynb`
-2. **Reconciled Audit & Report Deliverables (`reports/`):**
+2. **Reconciled Audit, Reports & Documentation (`reports/`, `DL/`, root):**
    - `reports/DL_FINAL_EXECUTION_AUDIT.md`
    - `reports/dl_final_benchmark_summary.csv`
    - `reports/dl_ablation_summary.csv`
    - `reports/dl_biocause_pr_roc_curves.png`
    - `reports/dl_biocause_bayesian_dag_motif.png`
-3. **Pipeline Prediction, Config & Graph Artifacts (Colab-generated in `data/processed/`):**
+   - `DL/README.md`
+   - `README.md`
+3. **Deployable Hybrid Packaging & Config (`DL/` & `DL/models/hybrid_biocause/`):**
+   - `DL/hybrid_inference.py`
+   - `DL/models/hybrid_biocause/fusion_config.json`
+   - `DL/models/hybrid_biocause/model_manifest.json`
+   - `DL/models/hybrid_biocause/README.md`
+   - `DL/models/hybrid_biocause/pubmedbert/` *(target binary dir, gitignored; pending Colab verification)*
+   - `DL/models/hybrid_biocause/aml_classifier.pkl` *(target Joblib pipeline, gitignored; pending Colab verification)*
+4. **Pipeline Prediction, Config & Graph Artifacts (Colab-generated in `data/processed/`):**
    - `data/processed/dl_corr2cause_test_predictions.csv`
    - `data/processed/dl_biocause_metrics.json`
    - `data/processed/dl_biocause_validation_predictions.csv`
