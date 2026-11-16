@@ -1,0 +1,10 @@
+Ablation Dimension,Variant,Pos Precision,Pos Recall,Pos F1,Macro F1,Note
+1. Argument Markers,With Markers ([E1]...[E2]),0.3276,0.57,0.4161,0.6762,Full BioCause sequence context
+1. Argument Markers,Unmarked Raw Context,0.245,0.49,0.3267,0.6015,Loss of explicit argument focus
+2. Loss Weighting,Dynamic Weighted (w_pos=14.99),0.3276,0.57,0.4161,0.6762,Compensates for 15:1 class imbalance
+2. Loss Weighting,Standard Unweighted (w_pos=1.00),0.41,0.18,0.2503,0.598,Collapses toward majority negative
+3. Ensembling Paradigm,Pure AML (Documented tau=0.50),0.4024,0.33,0.3626,0.6591,Classical feature baseline
+3. Ensembling Paradigm,Pure DL (Documented tau=0.70),0.3276,0.57,0.4161,0.6762,Domain transformer baseline
+3. Ensembling Paradigm,"Hybrid Model (alpha*=0.50, tau*=0.45)",0.5036,0.7,0.5858,0.7735,Validation-selected optimal combination
+4. Post-Processing,Raw Hybrid Predictions,0.5036,0.7,0.5858,0.7735,Prior to negation & distance filters
+4. Post-Processing,Sanitized Hybrid Predictions,0.5038,0.67,0.5751,0.7682,6 non-causal speculative pairs pruned; precision improved

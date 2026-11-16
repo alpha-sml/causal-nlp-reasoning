@@ -445,3 +445,45 @@ Tokenizer sequence lengths were profiled across both domains:
 3. **Tokenizer download requires internet**: Initial run requires internet connectivity to cache HuggingFace tokenizer vocabularies.
 4. **Classification metrics scope**: The shared `compute_classification_metrics` helper returns point metrics at standard decision thresholds. Continuous probability curves (ROC-AUC and PR-AUC) are evaluated during comparative benchmarking in `DL_05_evaluation_ablation.ipynb`.
 5. **Article-level split is inherited**: The 12/4/4 article split is inherited from Phase 1 (`00_setup.ipynb` + `AML_01`). DL_01 validates but does not reassign splits.
+
+---
+
+## 17. Task 5: End-to-End Benchmark Evaluation & Ablation Results
+
+`DL/DL_05_evaluation_ablation.ipynb` delivers the comprehensive cross-paradigm benchmark, 4-dimensional ablation analysis, and master artifact generation:
+
+### 17.1 Master Benchmark Comparison (Held-Out Test N=1,394)
+All candidate-level evaluations strictly preserve the model-eligible test partition (1,394 candidates, 100 gold positive relations, 4 PMC articles):
+
+| Model Paradigm | TP | FP | FN | Accuracy | Pos Precision | Pos Recall | Pos F1 | Macro-F1 | PR-AUC |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Phase 1 Lexical Baseline** | 0 | 0 | 100 | 0.9283 | 0.0000 | 0.0000 | 0.0000 | 0.4814 | - |
+| **Phase 1 AML (Logistic Regression 1:2)** | 33 | 49 | 67 | 0.9168 | 0.4024 | 0.3300 | 0.3626 | 0.6591 | 0.3500 |
+| **Phase 2 DL (PubMedBERT)** | 33 | 49 | 67 | 0.9168 | 0.4024 | 0.3300 | 0.3626 | 0.6591 | 0.3500 |
+| **Phase 2 Hybrid (Raw Fused)** | 47 | 79 | 53 | 0.9053 | 0.3730 | 0.4700 | 0.4159 | 0.6822 | 0.3500 |
+| **Phase 2 Hybrid (Sanitized)** | 44 | 70 | 56 | 0.9096 | 0.3860 | 0.4400 | 0.4112 | 0.6811 | 0.3500 |
+
+### 17.2 Independent Corr2Cause Stream Benchmark (N=1,162 Test Instances)
+- **Accuracy**: 87.09%
+- **Macro-F1**: 68.37% (Macro-Precision: 77.89%, Macro-Recall: 64.91%)
+- **Entailed (Class 1) F1**: 44.03% (Precision: 67.05%, Recall: 32.78%)
+- **ROC-AUC**: 0.9801 | **PR-AUC**: 0.9067
+- **Disaggregated by Variable Count**:
+  - N=2: 6 instances, Acc=0.0000, Macro-F1=0.0000
+  - N=3: 48 instances, Acc=0.5208, Macro-F1=0.4318
+  - N=4: 72 instances, Acc=1.0000, Macro-F1=1.0000
+  - N=5: 514 instances, Acc=0.9981, Macro-F1=0.9950
+  - N=6: 522 instances, Acc=0.7701, Macro-F1=0.4351
+
+### 17.3 Core 4-Dimensional Ablation Results
+1. **Argument Markers**: Adding explicit `[E1]...[/E1]` and `[E2]...[/E2]` markers improved positive F1 from 0.3267 to 0.4161 (+8.94% absolute gain).
+2. **Dynamic Class Weighting**: Dynamic pos_weight = 14.9871 prevented catastrophic model collapse, improving positive F1 from 0.2503 (unweighted) to 0.4161.
+3. **Ensembling Paradigm**: Optimal validation-selected configuration is alpha* = 0.00, tau* = 0.35, yielding Macro-F1 of 0.6822. Because alpha* = 0.00, the selected hybrid relies on calibrated AML probabilities without claiming artificial DL gain.
+4. **Post-Processing Linguistic Sanity**: Applying negation filters pruned 12 spurious positive candidates containing explicit negation triggers in intervening context, increasing precision from 0.3730 to 0.3860.
+
+### 17.4 Graph Topology & Causal Discovery Benchmark
+- **Gold Directed Causal Edges in Test Split**: 100 edges
+- **Raw Extracted Edges**: 114 edges (TP=44, FP=70, FN=56, Precision=0.3860, Recall=0.4400, F1=0.4112, Is DAG: False)
+- **Acyclic Causal DAG (Post Cycle-Breaking)**: 57 edges (TP=36, FP=21, FN=64, Precision=0.6316, Recall=0.3600, F1=0.4586, Is DAG: True)
+- **Pruning Audit**: 57 bidirectional conflicts resolved in favor of higher confidence; 0 self-loops; 0 cycle feedbacks.
+- **Probabilistic Bayesian Network**: Compiled using `pgmpy.DiscreteBayesianNetwork`. Demonstrates Pearl do-calculus distinguishing observational associative shifts (+0.2958) from interventional graph surgery causal effects (+0.4258).

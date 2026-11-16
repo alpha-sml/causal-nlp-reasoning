@@ -1,0 +1,6 @@
+Model Paradigm,TP,FP,FN,TN,Accuracy,Pos Precision,Pos Recall,Pos F1,Macro F1,ROC-AUC,PR-AUC
+Phase 1 Lexical Rule Baseline,0,0,100,1294,0.9283,0.0,0.0,0.0,0.4814,-,-
+Phase 1 AML (Logistic Regression 1:2),33,49,67,1245,0.9168,0.4024,0.33,0.3626,0.6591,0.9108,0.35
+Phase 2 DL (PubMedBERT),57,117,43,1177,0.8852,0.3276,0.57,0.4161,0.6762,0.7982,0.423
+Phase 2 Hybrid (Raw Fused),70,69,30,1225,0.929,0.5036,0.7,0.5858,0.7735,0.9343,0.5643
+Phase 2 Hybrid (Sanitized),67,66,33,1228,0.929,0.5038,0.67,0.5751,0.7682,0.9343,0.5643
