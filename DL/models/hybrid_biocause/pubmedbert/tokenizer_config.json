@@ -1,0 +1,25 @@
+{
+  "backend": "tokenizers",
+  "cls_token": "[CLS]",
+  "do_lower_case": true,
+  "extra_special_tokens": [
+    "[E1]",
+    "[/E1]",
+    "[E2]",
+    "[/E2]"
+  ],
+  "is_local": true,
+  "local_files_only": true,
+  "mask_token": "[MASK]",
+  "max_length": 384,
+  "model_max_length": 384,
+  "pad_token": "[PAD]",
+  "sep_token": "[SEP]",
+  "stride": 0,
+  "strip_accents": null,
+  "tokenize_chinese_chars": true,
+  "tokenizer_class": "BertTokenizer",
+  "truncation_side": "right",
+  "truncation_strategy": "longest_first",
+  "unk_token": "[UNK]"
+}

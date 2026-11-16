@@ -8,8 +8,8 @@ This tracked guide documents how the Phase 2 hybrid biomedical causal-relation e
 
 Across identical held-out BioCause test candidates (`N = 1,394`; `100` positive, `1,294` negative) and validation candidates (`N = 1,884`; `131` positive, `1,753` negative):
 1. **Phase 1 AML Baseline (`Logistic Regression (Moderate Weight 1:2)`)**: Delivers strong precision and ranking (`ROC-AUC = 0.9431`, `PR-AUC = 0.6119`), achieving `Pos F1 = 0.5622` (`P=0.6118, R=0.5200`) at fixed `0.5000` and `Pos F1 = 0.5568` (`P=0.6447, R=0.4900`) at validation-selected `0.5200` (`Val Pos F1 = 0.5976`).
-2. **Phase 2 PubMedBERT (`checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0273$)**: Captures broader contextual signals and reaches the highest positive recall (`0.8000` test, `TP=80`), but class weighting (`9307 / 621 = 14.9871`) compresses raw probabilities (`val max = 0.3182`) and increases false positives (`FP=228`), lowering standalone `Pos Precision` (`0.2597`) and `Pos F1` (`0.3922`, `Val Pos F1 = 0.3701`).
-3. **Validation-Selected Hybrid Fusion ($\alpha^* = 0.45, \tau^* = 0.3200$)**: Combining $0.45 \cdot P_{\text{DL}} + 0.55 \cdot P_{\text{AML}}$ pairs PubMedBERT's recall with AML's high-precision structural signal, lifting validation `Pos F1` to **`0.6400`** (`Val Macro-F1 = 0.8072`, `+0.0424` over tuned AML) and held-out test `Pos F1` to **`0.5907`** (`Macro-F1 = 0.7801`, `ROC-AUC = 0.9448`, `PR-AUC = 0.6364`). No statistical significance claim is made; selection follows the observed validation and test gains.
+2. **Phase 2 PubMedBERT (`checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.1600$)**: Captures broader contextual signals and reaches the highest positive recall (`0.5800` test, `TP=58`), but class weighting (`9307 / 621 = 14.9871`) compresses raw probabilities (`val max = 0.5028`) and increases false positives (`FP=98`), lowering standalone `Pos Precision` (`0.3718`) and `Pos F1` (`0.4531`, `Val Pos F1 = 0.4531`).
+3. **Validation-Selected Hybrid Fusion ($\alpha^* = 0.25, \tau^* = 0.4400$)**: Combining $0.25 \cdot P_{\text{DL}} + 0.75 \cdot P_{\text{AML}}$ pairs PubMedBERT's contextual signal with AML's high-precision structural signal, lifting validation `Pos F1` to **`0.6383`** (`Val Macro-F1 = 0.8071`, `+0.0407` over tuned AML) and achieving the highest held-out test ranking metrics (**`ROC-AUC = 0.9478`**, **`PR-AUC = 0.6269`**) while cutting PubMedBERT's false positives by `69%` (`98 -> 30`, `Pos F1 = 0.5475`, `Macro-F1 = 0.7582`). No statistical significance claim is made; selection follows the observed validation gains.
 
 ---
 
@@ -25,12 +25,11 @@ DL/models/hybrid_biocause/
 │   ├── special_tokens_map.json
 │   └── vocab.txt
 ├── aml_classifier.pkl              # Generated in Colab: Joblib-serialized sklearn Pipeline
-├── fusion_config.json              # Frozen fusion parameters (alpha_star=0.45, threshold_star=0.32)
-├── model_manifest.json             # Provenance, split counts, and persistence verification status
-└── README.md                       # Local package copy (untracked under .gitignore)
+├── fusion_config.json              # Frozen fusion parameters (alpha_star=0.25, threshold_star=0.44)
+├── model_manifest.json             # Provenance, split counts, and reload_and_inference_verified=true
 ```
 
-Per `.gitignore` (`models/`, `checkpoints/`, `*.safetensors`, `*.bin`, `*.pt`, `*.pth`), `DL/models/` is excluded from Git tracking so large neural weights and generated binaries are never committed to Git history. All code required to reproduce and verify the package is tracked in [`DL/hybrid_inference.py`](hybrid_inference.py), [`DL/DL_03_biocause_pubmedbert.ipynb`](DL_03_biocause_pubmedbert.ipynb), and [`DL/DL_04_hybrid_graph_integration.ipynb`](DL_04_hybrid_graph_integration.ipynb).
+Per `.gitignore`, `DL/models/hybrid_biocause/` (including `model.safetensors` and `aml_classifier.pkl`) is **tracked** (not ignored), while training `checkpoints/`, `**/checkpoint-*/`, `*.pt`, `*.pth`, and `*.bin` remain excluded. Because `model.safetensors` (`417.68 MB`) exceeds GitHub's `100 MB` regular file limit, use **Git LFS** (`git lfs track "DL/models/hybrid_biocause/pubmedbert/model.safetensors"`) before pushing to GitHub. All code required to reproduce and verify the package is tracked in [`DL/hybrid_inference.py`](hybrid_inference.py), [`DL/DL_03_biocause_pubmedbert.ipynb`](DL_03_biocause_pubmedbert.ipynb), and [`DL/DL_04_hybrid_graph_integration.ipynb`](DL_04_hybrid_graph_integration.ipynb).
 
 ---
 
@@ -76,5 +75,5 @@ model = AutoModelForSequenceClassification.from_pretrained(
 ## 5. Input & Output Schemas
 
 - **Required Input Columns**: `candidate_id`, `char_distance`, `arg1_before_arg2`, `between_text`, `arg1_text`, `arg2_text`, plus either `marked_text` (containing `[E1]`, `[/E1]`, `[E2]`, `[/E2]`) or standoff columns (`section_id`, `arg1_start`, `arg1_end`, `arg2_start`, `arg2_end`). Corr2Cause columns (`premise`, `hypothesis`) are explicitly rejected.
-- **Prediction Output Columns**: `candidate_id`, `aml_prob`, `dl_prob`, `hybrid_prob`, `hybrid_pred` (`>= 0.32`), `flag_negation`, `flag_distance`, `sanitized_pred`.
+- **Prediction Output Columns**: `candidate_id`, `aml_prob`, `dl_prob`, `hybrid_prob`, `hybrid_pred` (`>= 0.44`), `flag_negation`, `flag_distance`, `sanitized_pred`.
 - **Relation Output**: 17-column `dl_utils.UNIFIED_RELATION_SCHEMA` and acyclic `networkx.DiGraph` via `enforce_dag_acyclicity`.

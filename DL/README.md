@@ -72,8 +72,8 @@ A fundamental architectural constraint of this repository is the complete operat
 | :--- | :--- |
 | **`DL_01_data_preparation.ipynb`** | Ingest canonical raw datasets; audit 12/4/4 article-level split isolation (zero cross-split leakage); inject argument boundary markers (`[E1]`, `[/E1]`, `[E2]`, `[/E2]`); compute training dynamic class weight ($w_{\text{pos}} = 9,307 / 621 \approx 14.9871$ from model-eligible candidates); profile token lengths; serialize model-ready splits. |
 | **`DL_02_corr2cause_distilbert.ipynb`** | Fine-tune `distilbert-base-uncased` for Corr2Cause binary causal entailment; format `[CLS] Premise [SEP] Hypothesis [SEP]`; AdamW optimization with FP16; checkpoint selection on validation split; export test predictions. |
-| **`DL_03_biocause_pubmedbert.ipynb`** | Fine-tune `microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext` for BioCause directed relation classification; resize embeddings for special boundary tokens; apply normalized dynamic class-weighted loss; perform joint validation `(epoch_checkpoint, threshold)` selection (`checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0273$); export validation/test probabilities and metrics; persist SafeTensors weights & tokenizer (with standalone Section 10 recovery/verification cell). |
-| **`DL_04_hybrid_graph_integration.ipynb`** | Ingest AML and PubMedBERT streams; grid-search validation-optimal fusion weight $\alpha^* = 0.45$ and threshold $\tau^* = 0.3200$; apply linguistic negation filtering; format positive predictions into 17-column `UnifiedRelationRecord` schema; compile NetworkX DAG with `enforce_dag_acyclicity`; execute `pgmpy` Bayesian network interventional queries; serialize `aml_classifier.pkl` via Joblib and package `DL/models/hybrid_biocause/`. |
+| **`DL_03_biocause_pubmedbert.ipynb`** | Fine-tune `microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext` for BioCause directed relation classification; resize embeddings for special boundary tokens; apply normalized dynamic class-weighted loss; perform joint validation `(epoch_checkpoint, threshold)` selection (`checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.1600$); export validation/test probabilities and metrics; persist SafeTensors weights & tokenizer (with standalone Section 10 recovery/verification cell). |
+| **`DL_04_hybrid_graph_integration.ipynb`** | Ingest AML and PubMedBERT streams; grid-search validation-optimal fusion weight $\alpha^* = 0.25$ and threshold $\tau^* = 0.4400$; apply linguistic negation filtering; format positive predictions into 17-column `UnifiedRelationRecord` schema; compile NetworkX DAG with `enforce_dag_acyclicity`; execute `pgmpy` Bayesian network interventional queries; serialize `aml_classifier.pkl` via Joblib and package `DL/models/hybrid_biocause/`. |
 | **`DL_05_evaluation_ablation.ipynb`** | Comparative benchmarking (AML vs. DL vs. Hybrid); evaluate separate Corr2Cause and BioCause sections; execute 4-dimensional ablation studies with joint `(checkpoint, threshold)` validation selection; evaluate graph edge precision/recall/F1 against gold BioCause relations; export final summary tables and figures to `reports/`. |
 
 ---
@@ -464,17 +464,17 @@ All candidate-level evaluations strictly preserve the model-eligible test partit
 
 **Experimental Progression (AML Baseline $\to$ PubMedBERT $\to$ Hybrid Fusion):**
 - **AML Baseline (`Logistic Regression Moderate Weight 1:2`)** establishes high ranking quality (`ROC-AUC = 0.9431`, `PR-AUC = 0.6119`) and precision (`0.6118` at `0.5000`; `0.6447` at validation-selected `0.5200`), but misses roughly half of positive relations (`Pos Recall = 0.5200` / `0.4900`, `Pos F1 = 0.5622` / `0.5568`).
-- **PubMedBERT (`checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0273$)** recovers `80` of `100` gold causal pairs (`Pos Recall = 0.8000`), but dynamic loss weighting (`14.9871x`) yields compressed probabilities (`val max = 0.3182`) and `228` false positives (`Pos Precision = 0.2597`, `Pos F1 = 0.3922`, `Val Pos F1 = 0.3701`).
-- **Hybrid Fusion ($\alpha^* = 0.45$, $\tau^* = 0.3200$)** combines PubMedBERT's contextual recall with AML's structural precision, raising validation `Pos F1` to **`0.6400`** (`Val Macro-F1 = 0.8072`, `+0.0424` over tuned AML) and held-out test `Pos F1` to **`0.5907`** (`Macro-F1 = 0.7801`, `ROC-AUC = 0.9448`, `PR-AUC = 0.6364`). Selection reflects these observed validation and test improvements without claiming statistical significance.
+- **PubMedBERT (`checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.1600$)** recovers `58` of `100` gold causal pairs (`Pos Recall = 0.5800`), but dynamic loss weighting (`14.9871x`) yields compressed probabilities (`val max = 0.5028`) and `98` false positives (`Pos Precision = 0.3718`, `Pos F1 = 0.4531`, `Val Pos F1 = 0.4531`).
+- **Hybrid Fusion ($\alpha^* = 0.25$, $\tau^* = 0.4400$)** combines PubMedBERT's contextual signal with AML's structural precision, raising validation `Pos F1` to **`0.6383`** (`Val Macro-F1 = 0.8071`, `+0.0407` over tuned AML) and achieving the highest held-out test ranking metrics (**`ROC-AUC = 0.9478`**, **`PR-AUC = 0.6269`**) while reducing PubMedBERT's false positives by `69%` (`98 -> 30`, `Pos F1 = 0.5475`, `Macro-F1 = 0.7582`). Selection reflects these observed validation gains without claiming statistical significance.
 
 | Model Paradigm | Threshold | TP | FP | FN | TN | Accuracy | Pos Precision | Pos Recall | Pos F1 | Macro-F1 | ROC-AUC | PR-AUC |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **Lexical baseline** | - | 7 | 339 | 93 | 955 | 0.6901 | 0.0202 | 0.0700 | 0.0314 | 0.4235 | - | - |
-| **AML (fixed 0.50)** | 0.5000 | 52 | 33 | 48 | 1261 | 0.9419 | 0.6118 | 0.5200 | 0.5622 | 0.7655 | 0.9431 | 0.6119 |
+| **AML (fixed 0.50)** | 0.5000 | 52 | 33 | 48 | 1261 | 0.9419 | 0.6118 | 0.5200 | **0.5622** | **0.7655** | 0.9431 | 0.6119 |
 | **AML-only (validation-selected)** | 0.5200 | 49 | 27 | 51 | 1267 | **0.9440** | **0.6447** | 0.4900 | 0.5568 | 0.7635 | 0.9431 | 0.6119 |
-| **PubMedBERT (`checkpoint-3723`, Epoch 3.0)** | 0.0273 | 80 | 228 | 20 | 1066 | 0.8221 | 0.2597 | **0.8000** | 0.3922 | 0.6440 | 0.8809 | 0.3130 |
-| **Validation-selected hybrid ($\alpha^*=0.45$)** | 0.3200 | 57 | 36 | 43 | 1258 | 0.9433 | 0.6129 | 0.5700 | **0.5907** | **0.7801** | **0.9448** | **0.6364** |
-| **Sanitized hybrid** | 0.3200 | 53 | 33 | 47 | 1261 | 0.9426 | 0.6163 | 0.5300 | 0.5699 | 0.7696 | 0.9448 | 0.6364 |
+| **PubMedBERT (`checkpoint-3723`, Epoch 3.0)** | 0.1600 | 58 | 98 | 42 | 1196 | 0.8996 | 0.3718 | **0.5800** | 0.4531 | 0.6989 | 0.8950 | 0.3744 |
+| **Validation-selected hybrid ($\alpha^*=0.25$)** | 0.4400 | 49 | 30 | 51 | 1264 | 0.9419 | 0.6203 | 0.4900 | 0.5475 | 0.7582 | **0.9478** | **0.6269** |
+| **Sanitized hybrid** | 0.4400 | 46 | 27 | 54 | 1267 | 0.9419 | 0.6301 | 0.4600 | 0.5318 | 0.7504 | **0.9478** | **0.6269** |
 
 ### 17.2 Independent Corr2Cause Stream Benchmark (N=1,162 Test Instances)
 - **Accuracy**: `0.8623` (`1002 / 1162`)
@@ -489,31 +489,30 @@ All candidate-level evaluations strictly preserve the model-eligible test partit
   - `N=6`: `522` instances (`TP=28, FP=8, FN=92, TN=394`), `Accuracy=0.8084`, `Pos P=0.7778`, `Pos R=0.2333`, `Pos F1=0.3590`, `Macro-F1=0.6232`, `ROC-AUC=0.7539`, `PR-AUC=0.5295`
 
 ### 17.3 Core 4-Dimensional Ablation Results (`reports/dl_ablation_summary.csv`)
-1. **Argument Markers**: Removing `[E1]...[/E1]` and `[E2]...[/E2]` markers (`No entity markers`, `checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0566$) drops test Pos F1 from `0.3922` to `0.2660` (`-0.1262`), Pos Recall from `0.8000` to `0.5000`, ROC-AUC from `0.8809` to `0.7924`, and PR-AUC from `0.3130` to `0.2108`.
-2. **Dynamic Loss Weighting vs. Calibrated Thresholding**: At the default `0.50` `argmax` boundary, unweighted cross-entropy predicts `0` positives across all 3 epochs. Under joint validation epoch and threshold calibration (`Entity markers and unweighted loss`, `checkpoint-2482`, Epoch `2.0`, $\tau^* = 0.0439$), unweighted CE reaches higher standalone precision (`0.3659` vs. `0.2597`), Pos F1 (`0.4545` vs. `0.3922`), and PR-AUC (`0.3880` vs. `0.3130`), while dynamic class weighting (`pos_weight = 14.9871`) achieves substantially higher positive recall (`0.8000` vs. `0.6000`).
-3. **Ensembling Paradigm**: Validation-only grid search selects $\alpha^* = 0.45$, $\tau^* = 0.3200$ (`Val_Pos_F1 = 0.6400`, `Val_Macro_F1 = 0.8072`), outperforming `AML-only validation-selected` (test `Pos F1: 0.5907` vs. `0.5568`), `Pure AML (fixed 0.50)` (`0.5622`), and `Full model` (`0.3922`), while lifting `ROC-AUC` to `0.9448` and `PR-AUC` to `0.6364`.
-4. **Post-Processing Linguistic Sanity**: Negation filtering prunes `7` initial hybrid positive predictions (`93 -> 86`; `Pos Precision: 0.6129 -> 0.6163`, `Pos Recall: 0.5700 -> 0.5300`, candidate `Pos F1: 0.5907 -> 0.5699`).
+1. **Argument Markers**: Removing `[E1]...[/E1]` and `[E2]...[/E2]` markers (`No entity markers`, `checkpoint-2482`, Epoch `2.0`, $\tau^* = 0.0593$) drops test Pos F1 from `0.4531` to `0.2970` (`-0.1561`), ROC-AUC from `0.8950` to `0.7980`, and PR-AUC from `0.3744` to `0.1941`.
+2. **Dynamic Loss Weighting vs. Calibrated Thresholding**: At the default `0.50` `argmax` boundary, unweighted cross-entropy predicts `0` positives across all 3 epochs. Under joint validation epoch and threshold calibration (`Entity markers and unweighted loss`, `checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0800$), unweighted CE reaches slightly higher standalone precision (`0.3819` vs. `0.3718`), while dynamic class weighting (`pos_weight = 14.9871`) achieves higher positive recall (`0.5800` vs. `0.5500`), `Pos F1` (`0.4531` vs. `0.4508`), and `PR-AUC` (`0.3744` vs. `0.3743`).
+3. **Ensembling Paradigm**: Validation-only grid search selects $\alpha^* = 0.25$, $\tau^* = 0.4400$ (`Val_Pos_F1 = 0.6383`, `Val_Macro_F1 = 0.8071`), beating `AML-only validation-selected` (`0.5976`) and `Full model` (`0.4531`) on validation, and lifting held-out test `ROC-AUC` to `0.9478` and `PR-AUC` to `0.6269` (`Pos F1 = 0.5475`).
+4. **Post-Processing Linguistic Sanity**: Negation filtering prunes `6` initial hybrid positive predictions (`79 -> 73`; `Pos Precision: 0.6203 -> 0.6301`, `Pos Recall: 0.4900 -> 0.4600`, candidate `Pos F1: 0.5475 -> 0.5318`).
 
 ### 17.4 Graph Topology & Causal Discovery Benchmark
 - **Gold Directed Causal Edges in Test Split**: `100` edges across `4` test articles
-- **Raw Extracted Edges (Pre-Pruning)**: `86` edges (`TP=53, FP=33, FN=47`, `Precision=0.6163`, `Recall=0.5300`, `F1=0.5699`, `Is DAG: False`)
-- **Acyclic Causal DAG (Post Cycle-Breaking)**: `79` edges across `127` nodes (`TP=53, FP=26, FN=47`, `Precision=0.6709`, `Recall=0.5300`, `F1=0.5922`, `Is DAG: True`)
-- **Pruning Audit**: `7` bidirectional conflicts resolved (`0` self-loops, `0` cycle feedback edges) — all `7` removed edges were false positives while preserving all `53` true positives.
-- **Empirical Structure vs. Illustrative Synthetic CPDs**: The empirical extracted `G_dag` (`127` nodes, `79` edges) compiles structurally into `pgmpy.models.DiscreteBayesianNetwork`, while the quantitative $do$-calculus examples (`DL_05` Section 7 `Sensor -> Regulator -> Resistance`: `Baseline P(Resistance=1) = 0.4242`, observational `P(Resistance=1 | Sensor=1) = 0.7200` [`+0.2958`], interventional `P(Resistance=1 | do(Regulator=1)) = 0.8500` [`+0.4258`]) use explicitly synthetic CPDs.
+- **Raw Extracted Edges (Pre-Pruning)**: `73` edges (`TP=46, FP=27, FN=54`, `Precision=0.6301`, `Recall=0.4600`, `F1=0.5318`, `Is DAG: False`)
+- **Acyclic Causal DAG (Post Cycle-Breaking)**: `69` edges (`TP=46, FP=23, FN=54`, `Precision=0.6667`, `Recall=0.4600`, `F1=0.5444`, `Is DAG: True`)
+- **Pruning Audit**: `4` bidirectional conflicts resolved (`0` self-loops, `0` cycle feedback edges) — all `4` removed edges were false positives while preserving all `46` true positives.
+- **Empirical Structure vs. Illustrative Synthetic CPDs**: The empirical extracted `G_dag` (`69` edges) compiles structurally into `pgmpy.models.DiscreteBayesianNetwork`, while the quantitative $do$-calculus examples (`DL_05` Section 7 `Sensor -> Regulator -> Resistance`: `Baseline P(Resistance=1) = 0.4242`, observational `P(Resistance=1 | Sensor=1) = 0.7200` [`+0.2958`], interventional `P(Resistance=1 | do(Regulator=1)) = 0.8500` [`+0.4258`]) use explicitly synthetic CPDs.
 
 ---
 
 ## 18. Deployable Hybrid Model Package (`DL/models/hybrid_biocause/`) & Persistence Workflow
 
 ### Package Structure & `.gitignore` Policy
-The deployable hybrid BioCause bundle is targeted at `DL/models/hybrid_biocause/` (documented in [`DL/HYBRID_MODEL_PACKAGE.md`](HYBRID_MODEL_PACKAGE.md)):
-- `pubmedbert/`: Frozen PubMedBERT (`checkpoint-3723`, Epoch `3.0`) saved strictly as SafeTensors (`model.safetensors`, `config.json`, `checkpoint_provenance.json`) and marker-augmented tokenizer (`[E1]`, `[/E1]`, `[E2]`, `[/E2]`), loaded via HuggingFace `from_pretrained()`.
-- `aml_classifier.pkl`: Complete Joblib-serialized sklearn `Pipeline` (`hybrid_inference.BioCauseAMLFeatureExtractor` + `LogisticRegression(class_weight={0: 1.0, 1: 2.0}, C=1.0, max_iter=200, random_state=42)`) fitted strictly on raw training candidates (`10,086` rows).
-- `fusion_config.json`: Frozen validation-selected fusion configuration ($\alpha^* = 0.45$, $\tau^* = 0.3200$, $\tau_{\text{AML}}^* = 0.5200$, $\tau_{\text{DL}}^* = 0.0273$).
-- `model_manifest.json`: Model versions, training hyperparameters, authoritative split counts, and persistence verification status.
-- `README.md`: Loading/inference guide and input/output schema contract (`DL/hybrid_inference.py`).
+The deployable hybrid BioCause bundle lives in `DL/models/hybrid_biocause/` (documented in [`DL/HYBRID_MODEL_PACKAGE.md`](HYBRID_MODEL_PACKAGE.md)) and is **verified locally**:
+- `pubmedbert/`: Frozen PubMedBERT (`checkpoint-3723`, Epoch `3.0`) saved strictly as SafeTensors (`model.safetensors`, `417.68 MB`; `config.json`; `checkpoint_provenance.json`) and marker-augmented tokenizer (`tokenizer.json`, `tokenizer_config.json`), loaded via HuggingFace `from_pretrained()`.
+- `aml_classifier.pkl`: Complete Joblib-serialized sklearn `Pipeline` (`6,708` bytes; `hybrid_inference.BioCauseAMLFeatureExtractor` + `LogisticRegression(class_weight={0: 1.0, 1: 2.0}, C=1.0, max_iter=200, random_state=42)`) fitted strictly on raw training candidates (`10,086` rows; `val_max_abs_diff = 1.11e-16`, `test_max_abs_diff = 1.00e-16`).
+- `fusion_config.json`: Frozen validation-selected fusion configuration ($\alpha^* = 0.25$, $\tau^* = 0.4400$, $\tau_{\text{AML}}^* = 0.5200$, $\tau_{\text{DL}}^* = 0.1600$).
+- `model_manifest.json`: Model versions, training hyperparameters, authoritative split counts, and `reload_and_inference_verified: true`.
 
-Because `.gitignore` excludes `models/`, `checkpoints/`, `*.safetensors`, and `*.bin`, large neural weights and serialized binaries remain outside Git tracking and must be generated/verified in Google Colab before packaging/deployment:
+`.gitignore` is configured to **track** `DL/models/hybrid_biocause/` (including `model.safetensors` and `aml_classifier.pkl`) while keeping training `checkpoints/`, `*.pt`, `*.pth`, and `*.bin` excluded. Because `model.safetensors` (`417.68 MB`) exceeds GitHub's `100 MB` file size limit, track it with **Git LFS** (`git lfs track "DL/models/hybrid_biocause/pubmedbert/model.safetensors"`) before pushing to GitHub. To regenerate or re-verify from Colab:
 1. Run `DL/DL_03_biocause_pubmedbert.ipynb` Section 9 (`id=0b9968aa`) or standalone Section 10 recovery cell (`id=c94e21b0`) to serialize SafeTensors weights from `checkpoint-3723` on CPU and verify reload + validation sanity inference.
 2. Run `DL/DL_04_hybrid_graph_integration.ipynb` Section 11 (`id=b402e8c3`) and Section 12 (`id=f829a1d7`) to serialize `aml_classifier.pkl`, bundle `pubmedbert/`, verify validation-slice hybrid inference without accessing test labels, and mark `reload_and_inference_verified: true` in `model_manifest.json`.
 

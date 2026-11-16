@@ -1,0 +1,74 @@
+{
+  "task": "DL_04_hybrid_graph_integration",
+  "package_name": "hybrid_biocause",
+  "selected_model": "Hybrid Model (alpha=0.25)",
+  "alpha_star": 0.25,
+  "threshold_star": 0.44,
+  "aml_threshold_star": 0.52,
+  "aml_default_threshold": 0.5,
+  "dl_threshold_star": 0.16,
+  "fusion_formula": "P_hybrid = alpha_star * P_DL + (1.0 - alpha_star) * P_AML",
+  "selection_split": "validation",
+  "selection_split_rows": 1884,
+  "optimization_objective": "maximize_validation_positive_f1_then_macro_f1_then_smaller_alpha_then_closest_to_0.50_then_higher_tau",
+  "models": {
+    "dl_stream": {
+      "model_name": "microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext",
+      "artifact_subdir": "pubmedbert",
+      "selected_checkpoint": "checkpoint-3723",
+      "selected_epoch": 3.0,
+      "selected_step": 3723,
+      "weight_format": "safetensors",
+      "max_length": 384,
+      "special_entity_markers": [
+        "[E1]",
+        "[/E1]",
+        "[E2]",
+        "[/E2]"
+      ]
+    },
+    "aml_stream": {
+      "model_name": "Logistic Regression (Moderate Weight 1:2)",
+      "artifact_file": "aml_classifier.pkl",
+      "serialization": "joblib",
+      "estimator_class": "sklearn.pipeline.Pipeline",
+      "required_input_columns": [
+        "candidate_id",
+        "char_distance",
+        "arg1_before_arg2",
+        "between_text",
+        "arg1_text",
+        "arg2_text"
+      ]
+    }
+  },
+  "post_processing": {
+    "linguistic_filter": {
+      "enabled": true,
+      "max_between_chars": 400
+    },
+    "dag_cycle_breaking": {
+      "enabled": true,
+      "function": "AML/causal_extractors.py::enforce_dag_acyclicity"
+    }
+  },
+  "validation_metrics": {
+    "positive_f1": 0.6382978723404256,
+    "macro_f1": 0.8071194994308978
+  },
+  "test_metrics_reference": {
+    "Stream": "Hybrid Model (alpha=0.25)",
+    "Threshold": 0.44,
+    "TP": 49.0,
+    "FP": 30.0,
+    "FN": 51.0,
+    "TN": 1264.0,
+    "Accuracy": 0.9418938307030129,
+    "Pos Precision": 0.620253164556962,
+    "Pos Recall": 0.49,
+    "Pos F1": 0.547486033519553,
+    "Macro F1": 0.7582198277984886,
+    "ROC-AUC": 0.947758887171561,
+    "PR-AUC": 0.6269217521672354
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "package_name": "hybrid_biocause",
+  "package_directory": "DL/models/hybrid_biocause",
+  "persistence_status": {
+    "pubmedbert_weights_saved": true,
+    "aml_classifier_pkl_saved": true,
+    "reload_and_inference_verified": true
+  },
+  "dataset_splits": {
+    "biocause_model_eligible": {
+      "train": {
+        "total": 9928,
+        "positive": 621,
+        "negative": 9307
+      },
+      "validation": {
+        "total": 1884,
+        "positive": 131,
+        "negative": 1753
+      },
+      "test": {
+        "total": 1394,
+        "positive": 100,
+        "negative": 1294
+      }
+    },
+    "biocause_raw_train_fit_rows": 10086,
+    "dynamic_pos_weight": 14.987117552334944
+  },
+  "selected_checkpoint": "checkpoint-3723",
+  "selected_epoch": 3.0,
+  "selected_step": 3723,
+  "weight_format": "safetensors",
+  "aml_equivalence": {
+    "val_max_abs_diff": 1.1102230246251565e-16,
+    "test_max_abs_diff": 9.996344030316351e-17
+  },
+  "fusion_configuration": {
+    "alpha_star": 0.25,
+    "threshold_star": 0.44,
+    "dl_threshold_star": 0.16,
+    "aml_threshold_star": 0.52
+  },
+  "artifacts": [
+    {
+      "file": "aml_classifier.pkl",
+      "size_bytes": 6708,
+      "size_mb": 0.0064
+    },
+    {
+      "file": "fusion_config.json",
+      "size_bytes": 2155,
+      "size_mb": 0.0021
+    },
+    {
+      "file": "model_manifest.json",
+      "size_bytes": 2126,
+      "size_mb": 0.002
+    },
+    {
+      "file": "pubmedbert/checkpoint_provenance.json",
+      "size_bytes": 275,
+      "size_mb": 0.0003
+    },
+    {
+      "file": "pubmedbert/config.json",
+      "size_bytes": 691,
+      "size_mb": 0.0007
+    },
+    {
+      "file": "pubmedbert/model.safetensors",
+      "size_bytes": 437970936,
+      "size_mb": 417.6816
+    },
+    {
+      "file": "pubmedbert/tokenizer.json",
+      "size_bytes": 706844,
+      "size_mb": 0.6741
+    },
+    {
+      "file": "pubmedbert/tokenizer_config.json",
+      "size_bytes": 539,
+      "size_mb": 0.0005
+    }
+  ],
+  "package_versions": {
+    "torch": "2.14.1+cu130",
+    "transformers": "5.22.1",
+    "scikit-learn": "1.6.1",
+    "joblib": "1.6.0",
+    "scipy": "1.16.3",
+    "pandas": "2.2.3",
+    "numpy": "2.4.6",
+    "networkx": "3.7",
+    "safetensors": "0.8.0"
+  }
+}

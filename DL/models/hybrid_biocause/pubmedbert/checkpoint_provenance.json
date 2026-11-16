@@ -1,0 +1,8 @@
+{
+  "selected_checkpoint": "/content/causal-nlp-reasoning/DL/checkpoints/biocause_pubmedbert/checkpoint-3723",
+  "selected_checkpoint_name": "checkpoint-3723",
+  "selected_epoch": 3.0,
+  "selected_step": 3723,
+  "selected_threshold": 0.16,
+  "weight_format": "safetensors"
+}

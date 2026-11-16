@@ -30,11 +30,17 @@ data/processed/*
 *.onnx
 checkpoints/
 **/checkpoint-*/
-models/
 runs/
 wandb/
 .cache/
 hf_cache/
+
+# Track packaged deployable hybrid BioCause model artifacts
+!DL/models/
+!DL/models/hybrid_biocause/
+!DL/models/hybrid_biocause/**
+!DL/models/hybrid_biocause/pubmedbert/
+!DL/models/hybrid_biocause/pubmedbert/model.safetensors
 
 # Credentials and secrets
 kaggle.json
