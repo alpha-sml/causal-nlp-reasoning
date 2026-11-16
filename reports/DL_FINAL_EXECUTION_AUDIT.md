@@ -1,17 +1,16 @@
 # Final DL Notebook Execution and Independent Audit Report
 
-**Repository:** `alpha-sml/causal-nlp-reasoning`  
-**Branch:** `main`  
-**Starting Commit:** `e82e8f051cf0f24d34908a8d8dab073d0a8c02b9`  
-**Date of Audit:** 2026-11-12  
-**Status:** COMPLETE & INDEPENDENTLY AUDITED
+- **Repository:** `alpha-sml/causal-nlp-reasoning`
+- **Branch:** `main`
+- **Date of Audit:** `2026-11-16`
+- **Status:** COMPLETE & RECONCILED FROM GOOGLE COLAB EXECUTION OUTPUTS
 
 ---
 
 ## A. Execution Summary
 
 ### 1. Environment & Hardware Verification
-- **Runtime Environment:** Google Colab / Python 3 (IPython) kernel.
+- **Runtime Environment:** Google Colab / Python 3 (`ipykernel`) kernel.
 - **Kernel Specification:**
   ```json
   "kernelspec": {
@@ -20,59 +19,34 @@
     "name": "python3"
   }
   ```
-- **Active Interpreter:** Python 3.14.2 / IPython 8.x (`/usr/bin/python3 (Colab)`).
-- **Core Library Versions:**
-  - `torch`: `2.11.0`
-  - `transformers`: `4.40.0`
-  - `networkx`: `3.2.1`
-  - `pgmpy`: `0.1.25`
-  - `scikit-learn`: `1.5.0`
-  - `pandas`: `2.2.2`
-  - `numpy`: `1.26.4`
-  - `pytest`: `9.2.0`
-- **Execution Mode:** Top-to-bottom sequential re-execution of all five Deep Learning notebooks (`DL_01` through `DL_05`) in full dependency order using genuine trained checkpoints and prediction exports without synthetic fallbacks.
+- **Execution Mode:** Manual top-to-bottom sequential execution of all five Deep Learning notebooks (`DL_01` through `DL_05`) in Google Colab in full dependency order, reconciled with static JSON/source inspection of all executed notebook outputs (`DL/dl_utils.py` blob SHA `1844e06924e6b971c749f4453928c66427ccc9fc`).
 
 ### 2. Notebook Execution Register
-| Notebook | Scope | Cells | Status | Outputs Visible |
-| :--- | :--- | :---: | :---: | :---: |
-| `DL/DL_01_data_preparation.ipynb` | Tokenization, entity marking, BioCause split manifest creation | 33 | **SUCCESS (100%)** | Yes (28 outputs) |
-| `DL/DL_02_corr2cause_distilbert.ipynb` | DistilBERT fine-tuning and evaluation on Corr2Cause | 15 | **SUCCESS (100%)** | Yes (11 outputs) |
-| `DL/DL_03_biocause_pubmedbert.ipynb` | PubMedBERT fine-tuning and evaluation on BioCause | 15 | **SUCCESS (100%)** | Yes (24 outputs) |
-| `DL/DL_04_hybrid_graph_integration.ipynb` | Validation-only fusion grid search, frozen test evaluation, DAG extraction | 19 | **SUCCESS (100%)** | Yes (11 outputs) |
-| `DL/DL_05_evaluation_ablation.ipynb` | Global benchmark evaluation, 4D ablations, causal Bayesian reasoning | 14 | **SUCCESS (100%)** | Yes (14 outputs) |
+| Notebook | Scope | Total Cells | Code Cells | MD Cells | Outputs Present | Status |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| `DL/DL_01_data_preparation.ipynb` | Tokenization, entity marking, BioCause split manifest creation | 33 | 21 | 12 | 13 | **Executed** |
+| `DL/DL_02_corr2cause_distilbert.ipynb` | DistilBERT fine-tuning and evaluation on Corr2Cause | 14 | 9 | 5 | 16 | **Executed** |
+| `DL/DL_03_biocause_pubmedbert.ipynb` | PubMedBERT fine-tuning, joint epoch/threshold selection, BioCause test | 14 | 9 | 5 | 22 | **Executed** |
+| `DL/DL_04_hybrid_graph_integration.ipynb` | Validation-only fusion grid search, frozen test evaluation, DAG extraction | 18 | 9 | 9 | 8 | **Executed** |
+| `DL/DL_05_evaluation_ablation.ipynb` | Global benchmark evaluation, 4D ablations, causal Bayesian reasoning | 13 | 8 | 5 | 38 | **Executed** |
+| **TOTAL** | | **92** | **56** | **36** | **97** | **All Executed** |
 
 ---
 
 ## B. Notebook Cleanup and Privacy Audit
 
 ### 1. Comprehensive Path Disclosure Audit
-Every cell's source code, Markdown text, and output streams across all five DL notebooks were scanned for unintended absolute path patterns and visible relative directory prints.
+Across all five DL notebooks and this audit report:
+- Zero local machine absolute paths (`file:///`, `/Users/...`), VS Code resource URLs, or local machine usernames are referenced in source markdown or deliverables.
+- All file references in this report use repository-relative paths exclusively (e.g. `DL/DL_01_data_preparation.ipynb`, `reports/dl_final_benchmark_summary.csv`).
 
-| Notebook | Total Cells | Code Cells | MD Cells | Absolute Paths in Code | Absolute Paths in Outputs | Relative Paths in Code | Relative Paths in Outputs | Status |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `DL/DL_01_data_preparation.ipynb` | 33 | 21 | 12 | 0 | 0 | 4 | 0 | **Clean (0 visible paths)** |
-| `DL/DL_02_corr2cause_distilbert.ipynb` | 15 | 10 | 5 | 0 | 0 | 0 | 0 | **Clean (0 visible paths)** |
-| `DL/DL_03_biocause_pubmedbert.ipynb` | 15 | 10 | 5 | 0 | 0 | 0 | 0 | **Clean (0 visible paths)** |
-| `DL/DL_04_hybrid_graph_integration.ipynb` | 19 | 10 | 9 | 0 | 0 | 0 | 0 | **Clean (0 visible paths)** |
-| `DL/DL_05_evaluation_ablation.ipynb` | 14 | 9 | 5 | 0 | 0 | 0 | 0 | **Clean (0 visible paths)** |
-| **TOTAL** | **96** | **60** | **36** | **0** | **0** | **4** | **0** | **Zero Disclosures** |
-
-*Note on code paths:* The 4 relative paths in `DL_01` source code represent internal file resolution constants necessary to read data from `data/raw/` and write to `data/processed/` without hardcoding machine-specific locations. Zero directory paths are printed or surfaced in the execution outputs.
-
-### 2. Path Audit of this Audit Report
-- **Local `file:///` URLs:** 0
-- **VS Code resource URLs:** 0
-- **Local Machine Usernames:** 0
-- **Personal Machine Paths:** 0
-- All file references use repository-relative paths exclusively (e.g. `DL/DL_01_data_preparation.ipynb`, `reports/dl_final_benchmark_summary.csv`).
-
-### 3. Preservation of Scientific Research Outputs
-No scientific metrics, tables, classification reports, or plots were suppressed. All retained outputs directly represent experimental research findings:
-- Precision, recall, F1, and Macro-F1 across train/val/test splits.
-- Exact confusion matrices for all evaluated models.
-- Classification reports formatted as structured data tables.
-- NetworkX graph statistics and acyclicity validation.
-- Pgmpy Bayesian Network observational and interventional do-calculus query results.
+### 2. Preservation of Scientific Research Outputs
+All retained notebook outputs reflect genuine Google Colab executions:
+- Precision, recall, positive-class F1, Macro-F1, ROC-AUC, and PR-AUC across splits.
+- Exact confusion matrices for all evaluated models and disaggregated variable counts.
+- Complete 7-row executed ablation summary (`reports/dl_ablation_summary.csv`) including checkpoint and epoch provenance.
+- NetworkX graph statistics, deterministic cycle-pruning counts, and acyclicity verification.
+- Illustrative `pgmpy` Bayesian Network observational and interventional $do$-calculus query results.
 
 ---
 
@@ -80,134 +54,151 @@ No scientific metrics, tables, classification reports, or plots were suppressed.
 
 ### 1. Data Integrity and Split Validation
 - **Corr2Cause Splits:**
-  - Train: 205,734
-  - Validation: 1,076
-  - Test: 1,162
-- **Authoritative BioCause Model-Eligible Counts:**
-  - Train: 9,928
-  - Validation: 1,884 (131 positive, 1,753 negative)
-  - Test: 1,394 (100 positive, 1,294 negative)
-- **Tokenization Contract:** Entity markers `<e1>`, `</e1>`, `<e2>`, `</e2>` successfully injected into candidates; maximum sequence length strictly capped at 256 tokens.
+  - Train: `205,734`
+  - Validation: `1,076`
+  - Test: `1,162`
+  - Maximum Sequence Length: `256` tokens
+- **Authoritative BioCause Model-Eligible Counts** (excluding `202` invalid standoff/budget reconstructions from `13,408` raw candidates):
+  - Train: `9,928` (`621` positive, `9,307` negative; dynamic positive class weight $w_{\text{pos}} = 9,307 / 621 \approx 14.9871$)
+  - Validation: `1,884` (`131` positive, `1,753` negative)
+  - Test: `1,394` (`100` positive, `1,294` negative)
+- **Entity Boundary Markers & Token Budget:** Explicit tokens `[E1]`, `[/E1]`, `[E2]`, `[/E2]` injected around candidate spans; maximum sequence length capped at `384` tokens.
 
-### 2. Corr2Cause Benchmark (DistilBERT)
+### 2. Corr2Cause Benchmark (DistilBERT — `DL_02` & `DL_05`)
 - **Model:** `distilbert-base-uncased` fine-tuned on causal NLI premise-hypothesis pairs.
-- **Test Performance ($N = 1,162$):**
-  - **Accuracy:** $0.8417$
-  - **Precision (Macro):** $0.8425$
-  - **Recall (Macro):** $0.8417$
-  - **Macro-F1:** $0.8415$
-  - **Binary Class 1 (Causal):** Precision = $0.8524$, Recall = $0.8262$, F1 = $0.8391$
-  - **Confusion Matrix:**
-    $$\begin{pmatrix} 497 & 84 \\ 100 & 481 \end{pmatrix}$$
+- **Validation Selection:** Epoch `3.0` (`validation_loss = 0.3651`, `validation_accuracy = 0.8745`, `validation_precision = 0.7137`, `validation_recall = 0.6277`, `validation_macro_f1 = 0.6541`, `validation_roc_auc = 0.8440`, `validation_pr_auc = 0.3895`).
+- **Held-Out Test Performance ($N = 1,162$):**
+  - **Accuracy:** $0.8623$ ($1002 / 1162$)
+  - **Positive (Class 1 Entailed):** Precision = $0.5962$, Recall = $0.3444$, Pos F1 = $0.4366$
+  - **Macro Metrics:** Precision = $0.7423$, Recall = $0.6508$, Macro-F1 = $0.6791$
+  - **ROC-AUC:** $0.8594$ | **PR-AUC:** $0.5135$
+  - **Confusion Matrix** (`[[TN, FP], [FN, TP]]`):
+    $$\begin{pmatrix} 940 & 42 \\ 118 & 62 \end{pmatrix}$$
+- **Disaggregated by `num_variables`:**
+  | Scope | Examples | TP | FP | FN | TN | Accuracy | Pos Precision | Pos Recall | Pos F1 | Macro F1 | ROC-AUC | PR-AUC |
+  | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+  | `num_variables = 2` | 6 | 0 | 1 | 0 | 5 | 0.8333 | 0.0000 | 0.0000 | 0.0000 | 0.4545 | - | - |
+  | `num_variables = 3` | 48 | 3 | 8 | 0 | 37 | 0.8333 | 0.2727 | 1.0000 | 0.4286 | 0.6655 | 0.9111 | 0.5278 |
+  | `num_variables = 4` | 72 | 0 | 8 | 0 | 64 | 0.8889 | 0.0000 | 0.0000 | 0.0000 | 0.4706 | - | - |
+  | `num_variables = 5` | 514 | 31 | 17 | 26 | 440 | 0.9163 | 0.6458 | 0.5439 | 0.5905 | 0.7719 | 0.9317 | 0.6806 |
+  | `num_variables = 6` | 522 | 28 | 8 | 92 | 394 | 0.8084 | 0.7778 | 0.2333 | 0.3590 | 0.6232 | 0.7539 | 0.5295 |
 - **Data Isolation:** Strict isolation maintained; Corr2Cause data is never mixed into BioCause biomedical relation extraction or graph synthesis.
 
-### 3. BioCause Relation Extraction Benchmark
-The AML test metrics have been audited and recomputed from the authentic test predictions (`data/processed/aml_biocause_test_predictions.csv`). The previously transcribed accuracy of 0.8845 has been corrected to the true value of 0.9168, exactly matching the confusion matrix.
+### 3. BioCause Relation Extraction Benchmark (`DL_03`–`DL_05`)
+Evaluated on identical model-eligible test candidates ($N = 1,394$; $100$ positive, $1,294$ negative across 4 held-out test PMC articles):
 
-- **Baseline AML Classifier (Logistic Regression, Moderate Weight 1:2, $\tau = 0.50$):**
-  - Evaluated on 1,394 model-eligible candidates (100 positive relations).
-  - **Accuracy:** **$0.9168$** ($1278 / 1394$)
-  - **Positive Precision:** $0.4024$ ($33 / 82$)
-  - **Positive Recall:** $0.3300$ ($33 / 100$)
-  - **Positive F1:** $0.3626$
-  - **Macro-F1:** $0.6591$
-  - **ROC-AUC:** $0.9108$
-  - **PR-AUC:** $0.3500$
-  - **Confusion Matrix:**
-    $$\begin{pmatrix} 1245 & 49 \\ 67 & 33 \end{pmatrix}$$
-    - True Negatives (TN): 1,245
-    - False Positives (FP): 49
-    - False Negatives (FN): 67
-    - True Positives (TP): 33
-    - Total: $\text{TN} + \text{FP} + \text{FN} + \text{TP} = 1,245 + 49 + 67 + 33 = 1,394$
-    - Recomputed Accuracy: $(1245 + 33) / 1394 = 1278 / 1394 = 0.916786... \approx 0.9168$.
+- **Lexical Baseline (`between_text` regex baseline):**
+  - **Accuracy:** $0.6901$ ($962 / 1394$)
+  - **Pos Precision:** $0.0202$ | **Pos Recall:** $0.0700$ | **Pos F1:** $0.0314$ | **Macro-F1:** $0.4235$
+  - **Confusion Matrix** (`[[TN, FP], [FN, TP]]`): `[[955, 339], [93, 7]]`
 
-- **PubMedBERT Classifier (Fine-Tuned with Entity Markers & Dynamic Weighting, $\tau^* = 0.70$):**
-  - Evaluated on 1,394 model-eligible candidates (100 positive relations).
-  - **Accuracy:** $0.8852$ ($1234 / 1394$)
-  - **Positive Precision:** $0.3276$ ($57 / 174$)
-  - **Positive Recall:** $0.5700$ ($57 / 100$)
-  - **Positive F1:** $0.4161$
-  - **Macro-F1:** $0.6762$
-  - **ROC-AUC:** $0.7982$
-  - **PR-AUC:** $0.4230$
-  - **Confusion Matrix:**
-    $$\begin{pmatrix} 1177 & 117 \\ 43 & 57 \end{pmatrix}$$
+- **AML Baseline (`aml_biocause_*_predictions.csv`, Fixed $\tau = 0.5000$):**
+  - **Validation ($N = 1,884$):** `129` positive predictions, Pos Precision = $0.5969$, Pos Recall = $0.5878$, Pos F1 = $0.5923$, Macro-F1 = $0.7810$.
+  - **Held-Out Test ($N = 1,394$):** Accuracy = $0.9419$ ($1313 / 1394$), Pos Precision = $0.6118$, Pos Recall = $0.5200$, Pos F1 = $0.5622$, Macro-F1 = $0.7655$, ROC-AUC = $0.9431$, PR-AUC = $0.6119$.
+  - **Test Confusion Matrix** (`[[TN, FP], [FN, TP]]`): `[[1261, 33], [48, 52]]`
 
-### 4. Hybrid Integration Methodology & Results
+- **AML-Only Validation-Selected ($\tau^* = 0.5200$):**
+  - **Validation ($N = 1,884$):** `120` positive predictions, Pos Precision = $0.6250$, Pos Recall = $0.5725$, Pos F1 = $0.5976$, Macro-F1 = $0.7844$.
+  - **Held-Out Test ($N = 1,394$):** Accuracy = $0.9440$ ($1316 / 1394$), Pos Precision = $0.6447$, Pos Recall = $0.4900$, Pos F1 = $0.5568$, Macro-F1 = $0.7635$, ROC-AUC = $0.9431$, PR-AUC = $0.6119$.
+  - **Test Confusion Matrix** (`[[TN, FP], [FN, TP]]`): `[[1267, 27], [51, 49]]`
+
+- **PubMedBERT Classifier (Joint Validation-Selected `checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0273$):**
+  - **Validation Probability Calibration Summary ($N = 1,884$):** min = $0.0013$, median = $0.0059$, mean = $0.0335$, max = $0.3182$.
+  - **Validation Metrics at $\tau^* = 0.0273$:** `377` positive predictions, Pos Precision = $0.2493$, Pos Recall = $0.7176$, Pos F1 = $0.3701$, Macro-F1 = $0.6360$, ROC-AUC = $0.8588$, PR-AUC = $0.3204$, Validation Confusion Matrix (`[[TN, FP], [FN, TP]]`): `[[1470, 283], [37, 94]]`. *(At fixed $\tau = 0.5000$: `0` positive predictions, Pos F1 = $0.0000$, Macro-F1 = $0.4820$.)*
+  - **Held-Out Test at Frozen (`checkpoint-3723`, $\tau^* = 0.0273$):** Accuracy = $0.8221$ ($1146 / 1394$), Pos Precision = $0.2597$, Pos Recall = $0.8000$, Pos F1 = $0.3922$, Macro-F1 = $0.6440$, ROC-AUC = $0.8809$, PR-AUC = $0.3130$.
+  - **Test Confusion Matrix** (`[[TN, FP], [FN, TP]]`): `[[1066, 228], [20, 80]]`
+
+### 4. Hybrid Integration, Graph Refinement & Illustrative Do-Calculus (`DL_04` & `DL_05`)
 - **Fusion Formula:**
   $$P_{\text{hybrid}}^{(i)} = \alpha \cdot P_{\text{DL}}^{(i)} + (1 - \alpha) \cdot P_{\text{AML}}^{(i)}$$
-- **Validation Parameter Selection:**
-  - Evaluated strictly on validation data ($N = 1,884$) over grid $\alpha \in [0.0, 1.0]$ (step $0.05$) and $\tau \in [0.10, 0.90]$ (step $0.05$).
-  - Optimal validation parameters: $\alpha^* = 0.50$, $\tau^* = 0.45$.
-  - Validation metrics at $(\alpha^*=0.50, \tau^*=0.45)$: Pos F1 = $0.5546$, Macro-F1 = $0.7623$.
-- **Held-Out Test Split Single-Pass Evaluation (Parameters Frozen):**
-  - **Accuracy:** $0.9290$ ($1295 / 1394$)
-  - **Positive Precision:** $0.5036$ ($70 / 139$)
-  - **Positive Recall:** $0.7000$ ($70 / 100$)
-  - **Positive F1:** **$0.5858$** (+0.1697 over DL-only, +0.2232 over AML-only)
-  - **Macro-F1:** **$0.7735$** (+0.0973 over DL-only, +0.1144 over AML-only)
-  - **ROC-AUC:** $0.9343$
-  - **PR-AUC:** $0.5643$
-  - **Confusion Matrix:**
-    $$\begin{pmatrix} 1225 & 69 \\ 30 & 70 \end{pmatrix}$$
+- **Validation Parameter Selection ($N = 1,884$):**
+  - Grid search over $\alpha \in [0.00, 1.00]$ (step $0.05$) and candidate thresholds $\tau \in [0.01, 0.99]$ + validation quantiles with positive-F1-first objective.
+  - Optimal validation configuration: $\alpha^* = 0.45$, $\tau^* = 0.3200$.
+  - Validation metrics at $(\alpha^* = 0.45, \tau^* = 0.3200)$: `119` positive predictions, Pos Precision = $0.6723$, Pos Recall = $0.6107$, Pos F1 = **$0.6400$**, Macro-F1 = **$0.8072$** ($+0.0424$ validation Pos F1 over tuned AML).
+- **Held-Out Test Evaluation ($N = 1,394$, Parameters Frozen at $\alpha^* = 0.45, \tau^* = 0.3200$):**
+  - **Accuracy:** $0.9433$ ($1315 / 1394$)
+  - **Pos Precision:** $0.6129$ | **Pos Recall:** $0.5700$
+  - **Pos F1:** **$0.5907$** ($+0.0339$ vs. tuned AML `0.5568`, $+0.0285$ vs. fixed AML `0.5622`, $+0.1985$ vs. standalone PubMedBERT `0.3922`)
+  - **Macro-F1:** **$0.7801$** | **ROC-AUC:** **$0.9448$** | **PR-AUC:** **$0.6364$**
+  - **Test Confusion Matrix** (`[[TN, FP], [FN, TP]]`): `[[1258, 36], [43, 57]]`
 - **Post-Processing & Graph Refinement:**
-  1. **Linguistic Sanity Filter:** Pruned 6 non-causal speculative pairs $\to$ 133 sanitized positive relations (Positive Precision = $0.5038$, Positive Recall = $0.6700$, Positive F1 = $0.5751$).
-  2. **Deterministic Cycle Breaking:** Resolved 41 bidirectional edge conflicts $\to$ 92 acyclic directed edges (Precision = $0.5652$, Recall = $0.5200$, F1 = $0.5417$).
-  3. **Graph Acyclicity:** `nx.is_directed_acyclic_graph(G_dag)` = **`True`**.
-- **Bayesian Network Reasoning (pgmpy):**
-  - Observational Difference: $P(\text{effect}=1 \mid \text{cause}=1) - P(\text{effect}=1 \mid \text{cause}=0) = +0.2958$.
-  - Interventional Difference: $P(\text{effect}=1 \mid do(\text{cause}=1)) - P(\text{effect}=1 \mid do(\text{cause}=0)) = +0.4258$.
-  - *Scientific Note:* CPDs are synthetic and serve to demonstrate do-calculus query capabilities on the derived DAG structure.
+  1. **Linguistic Sanity Filter:** `93` initial positive predictions $\to$ `7` rejected by negation (`0` by distance, `0` both) $\to$ `86` surviving positive relations (Test Accuracy = $0.9426$, Pos Precision = $0.6163$, Pos Recall = $0.5300$, Pos F1 = $0.5699$, Macro-F1 = $0.7696$, Confusion Matrix `[[1261, 33], [47, 53]]`).
+  2. **Deterministic Cycle Breaking (`enforce_dag_acyclicity`):** `127` nodes, `86` raw edges (`Is DAG = False`) $\to$ pruned `7` bidirectional conflict edges (`0` self-loops, `0` cycle feedback edges) $\to$ `79` acyclic directed edges (`Is DAG = True`).
+  3. **Graph Edge Evaluation ($100$ Gold Test Relations):**
+     - **Raw Extracted Graph (Pre-Pruning):** `86` edges, `TP = 53, FP = 33, FN = 47`, Precision = $0.6163$, Recall = $0.5300$, F1 = $0.5699$, `Is DAG = False`.
+     - **Acyclic Causal DAG (Post-Pruning):** `79` edges, `TP = 53, FP = 26, FN = 47`, Precision = **$0.6709$**, Recall = $0.5300$, F1 = **$0.5922$**, `Is DAG = True`. *(All 7 bidirectional conflict removals eliminated false positives while retaining all 53 true positives.)*
+- **Illustrative Bayesian Network Reasoning (`pgmpy`, `DL_05` Section 7):**
+  - 3-node biological motif (`Sensor -> Regulator -> Resistance`) with explicitly synthetic CPDs:
+  - Baseline marginal $P(\text{Resistance}=1) = 0.4242$
+  - Observational $P(\text{Resistance}=1 \mid \text{Sensor}=1) = 0.7200$ (`+0.2958`)
+  - Interventional $P(\text{Resistance}=1 \mid do(\text{Regulator}=1)) = 0.8500$ (`+0.4258`)
+  - *Scientific Note:* CPDs are synthetic and illustrative; they demonstrate Pearl's $do$-calculus graph surgery separately from empirical corpus co-occurrence counts.
 
-### 5. Multi-Dimensional Ablation Verification
-All four ablation dimensions were verified against identical test splits ($N = 1,394$) and are summarized in `reports/dl_ablation_summary.csv`:
-1. **Entity Markers:** Positive F1 improved from $0.3267$ (raw text) to $0.4161$ with `<e1>`, `</e1>`, `<e2>`, `</e2>`.
-2. **Dynamic Class Weighting:** Positive F1 improved from $0.2503$ (unweighted CE) to $0.4161$ (positive class weight $w_+ = 14.99$).
-3. **Hybrid Ensembling:** Positive F1 improved from $0.4161$ (DL-only) and $0.3626$ (AML-only) to $0.5858$ (balanced linear fusion at $\alpha=0.50$).
-4. **Post-Processing & Graph Constraints:** Mathematical cycle-breaking successfully pruned bidirectional relation ambiguities while maintaining strong precision ($0.5652$).
+### 5. Multi-Dimensional Ablation Verification (`reports/dl_ablation_summary.csv`)
+All variants were evaluated on identical held-out test candidates ($N = 1,394$) with validation-only joint checkpoint and threshold selection:
+
+| Ablation | Status | Selected Checkpoint | Epoch | Threshold | Val Pos F1 | Val Macro F1 | TP | FP | FN | TN | Accuracy | Pos Precision | Pos Recall | Pos F1 | Macro F1 | ROC-AUC | PR-AUC |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| `Full model with markers and weighted loss` | `completed` | `checkpoint-3723` | `3.0` | `0.0273` | 0.3701 | 0.6360 | 80 | 228 | 20 | 1066 | 0.8221 | 0.2597 | **0.8000** | 0.3922 | 0.6440 | 0.8809 | 0.3130 |
+| `No entity markers` | `completed` | `checkpoint-3723` | `3.0` | `0.0566` | 0.2356 | 0.5682 | 50 | 226 | 50 | 1068 | 0.8020 | 0.1812 | 0.5000 | 0.2660 | 0.5758 | 0.7924 | 0.2108 |
+| `Entity markers and unweighted loss` | `completed` | `checkpoint-2482` | `2.0` | `0.0439` | 0.4667 | 0.7103 | 60 | 104 | 40 | 1190 | 0.8967 | 0.3659 | 0.6000 | 0.4545 | 0.6987 | 0.8967 | 0.3880 |
+| `Pure AML (fixed 0.50)` | `completed` | `-` | `-` | `0.5000` | - | - | 52 | 33 | 48 | 1261 | 0.9419 | 0.6118 | 0.5200 | 0.5622 | 0.7655 | 0.9431 | 0.6119 |
+| `AML-only validation-selected threshold` | `completed` | `-` | `-` | `0.5200` | 0.5976 | 0.7844 | 49 | 27 | 51 | 1267 | **0.9440** | **0.6447** | 0.4900 | 0.5568 | 0.7635 | 0.9431 | 0.6119 |
+| `Validation-selected hybrid` | `completed` | `-` | `-` | `0.3200` | **0.6400** | **0.8072** | 57 | 36 | 43 | 1258 | 0.9433 | 0.6129 | 0.5700 | **0.5907** | **0.7801** | **0.9448** | **0.6364** |
+| `Sanitized hybrid (linguistic filtering)` | `completed` | `-` | `-` | `0.3200` | - | - | 53 | 33 | 47 | 1261 | 0.9426 | 0.6163 | 0.5300 | 0.5699 | 0.7696 | 0.9448 | 0.6364 |
+
+Key ablation findings:
+1. **Entity Markers (`[E1]`, `[E2]`):** Removing explicit argument markers degrades test Pos F1 from `0.3922` to `0.2660` (`-0.1262`), ROC-AUC from `0.8809` to `0.7924`, and PR-AUC from `0.3130` to `0.2108`.
+2. **Dynamic Class Weighting vs. Calibrated Thresholding:** At fixed `0.50` (`argmax`), unweighted cross-entropy predicts `0` positives across all 3 epochs. Under joint validation epoch and threshold calibration (`checkpoint-2482`, Epoch `2.0`, $\tau = 0.0439$), unweighted CE reaches higher standalone precision (`0.3659` vs `0.2597`), Pos F1 (`0.4545` vs `0.3922`), and PR-AUC (`0.3880` vs `0.3130`), while dynamic weighting ($w_{\text{pos}} = 14.9871$) achieves much higher positive recall (`0.8000` vs `0.6000`).
+3. **Hybrid Ensembling:** Validation-tuned linear fusion ($\alpha^* = 0.45, \tau^* = 0.3200$) outperforms every standalone model on Pos F1 (`0.5907`), Macro-F1 (`0.7801`), ROC-AUC (`0.9448`), and PR-AUC (`0.6364`).
+4. **Linguistic Post-Processing & DAG Constraints:** Linguistic negation filtering removes 4 TPs alongside 3 FPs at candidate level (`Pos F1: 0.5907 -> 0.5699`), while subsequent `enforce_dag_acyclicity` pruning eliminates 7 strictly false-positive bidirectional conflicts, boosting graph edge Precision to `0.6709` and Graph F1 to `0.5922`.
 
 ---
 
-## D. Automated Validation Suite
+## D. Static Validation & Integrity Checks
 
-| Validation Check | Command / Assertion | Result | Exit Code |
-| :--- | :--- | :---: | :---: |
-| Full Project Pytest Suite | `pytest tests/` | **190 passed, 0 failed** | `0` |
-| Notebook Schema Validation | `nbformat.validate()` on all 5 DL notebooks | **100% Valid (nbformat v4)** | `0` |
-| Git Whitespace Check | `git diff --check` | **Clean (0 errors)** | `0` |
-| Candidate ID Alignment | Exact set equality on BioCause validation ($N=1,884$) and test ($N=1,394$) | **100% Match (0 missing/misaligned)** | `0` |
-| Probability Bounds | $P \in [0, 1]$ across all streams | **All Finite within $[0, 1]$** | `0` |
-| DAG Acyclicity | `nx.is_directed_acyclic_graph(G_dag)` | **`True`** | `0` |
-| Absolute Path Disclosures | Regex scan across code and outputs | **0 matches across all 5 notebooks** | `0` |
-| Relative Path Disclosures | Regex scan across outputs | **0 matches across all 5 notebooks** | `0` |
+| Validation Check | Scope / Assertion | Result |
+| :--- | :--- | :---: |
+| Notebook JSON Validation | `jq empty` across all 5 DL notebooks (`DL_01`–`DL_05`) | **Valid JSON (Exit 0)** |
+| Git Whitespace Check | `git diff --check` across working tree | **Clean (Exit 0)** |
+| Shared Utilities Preservation | `git hash-object DL/dl_utils.py` | **`1844e06924e6b971c749f4453928c66427ccc9fc` (Exact Match)** |
+| Candidate ID Alignment | Exact order & label agreement across BioCause val ($N=1,884$) and test ($N=1,394$) in executed Colab assertions | **100% Match (Passed in `DL_04` / `DL_05`)** |
+| Probability Bounds | Finite probabilities in $[0, 1]$ across AML, PubMedBERT, and Hybrid streams | **Verified (Passed in `DL_03`–`DL_05`)** |
+| DAG Acyclicity | `nx.is_directed_acyclic_graph(G_dag)` & edge-count pruning reconciliation (`86 - 7 = 79`) | **`True` (Passed in `DL_04` & `DL_05`)** |
+| Phase 1 Protection | Unmodified `AML/`, `00_setup.ipynb`, `01_eda.ipynb`, `tests/test_phase1_baseline.py`, `requirements.txt` | **Unmodified** |
 
 ---
 
 ## E. Outstanding Issues and Limitations
 
-1. **Synthetic CPDs:** The Bayesian Network demonstration in Section 8 of `DL_04` uses synthetic conditional probability distributions (CPDs) to illustrate do-calculus and observational queries. These distributions do not represent learned epidemiological ground truth.
-2. **Entity Marker Scope:** Entity markers are placed around primary candidate entities; complex nested multi-word biomedical abbreviations may require sub-token boundary refinement in future iterations.
-3. **Working Tree Status:** In accordance with audit rules, all changes are preserved in the local working tree without committing or pushing.
+1. **Synthetic CPDs:** The Bayesian Network demonstration in Section 7 of `DL_05` (`Sensor -> Regulator -> Resistance`) and Section 8 of `DL_04` uses synthetic conditional probability distributions (CPDs) to illustrate Pearl's $do$-calculus and must not be interpreted as empirically estimated biological effect sizes.
+2. **Low Probability Calibration in Weighted PubMedBERT:** Under dynamic positive class weighting ($14.9871\times$), raw softmax probabilities on validation remain compressed (`max = 0.3182`), requiring validation-selected thresholding ($\tau^* = 0.0273$) rather than a naive $0.50$ cutoff.
+3. **Working Tree Status:** All notebook outputs, extracted report artifacts, and reconciled documentation remain unstaged in the local working tree without committing or pushing to Git.
 
 ---
 
 ## F. Final Deliverables Register
 
-1. **Cleaned & Executed Notebooks:**
+1. **Executed Notebooks:**
    - `DL/DL_01_data_preparation.ipynb`
    - `DL/DL_02_corr2cause_distilbert.ipynb`
    - `DL/DL_03_biocause_pubmedbert.ipynb`
    - `DL/DL_04_hybrid_graph_integration.ipynb`
    - `DL/DL_05_evaluation_ablation.ipynb`
-2. **Audit Report:**
+2. **Reconciled Audit & Report Deliverables (`reports/`):**
    - `reports/DL_FINAL_EXECUTION_AUDIT.md`
-3. **Exported CSV & Figure Artifacts:**
    - `reports/dl_final_benchmark_summary.csv`
    - `reports/dl_ablation_summary.csv`
    - `reports/dl_biocause_pr_roc_curves.png`
    - `reports/dl_biocause_bayesian_dag_motif.png`
+3. **Pipeline Prediction, Config & Graph Artifacts (Colab-generated in `data/processed/`):**
+   - `data/processed/dl_corr2cause_test_predictions.csv`
+   - `data/processed/dl_biocause_metrics.json`
+   - `data/processed/dl_biocause_validation_predictions.csv`
+   - `data/processed/dl_biocause_test_predictions.csv`
    - `data/processed/dl_biocause_hybrid_validation_predictions.csv`
    - `data/processed/dl_biocause_hybrid_test_predictions.csv`
+   - `data/processed/dl_biocause_fusion_config.json`
+   - `data/processed/dl_biocause_hybrid_positive_relations.csv`
    - `data/processed/dl_biocause_hybrid_dag_edges.csv`
-   - `data/processed/dl_biocause_cycle_breaking_diagnostics.json`
+   - `data/processed/dl_biocause_graph_pruning_diagnostics.json`

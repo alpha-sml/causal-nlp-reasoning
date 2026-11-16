@@ -119,7 +119,8 @@ DL_01_data_preparation.ipynb
   Inputs:
     - data/processed/dl_biocause_{train,val,test}.csv
   Outputs:
-    - DL/checkpoints/biocause_pubmedbert/ (best model weights)
+    - DL/models/biocause_pubmedbert_best/ (validation-selected checkpoint & tokenizer)
+    - data/processed/dl_biocause_metrics.json (joint epoch & threshold selection metadata)
     - data/processed/dl_biocause_validation_predictions.csv (1,884 rows; columns: candidate_id, article_id, section_id, arg1_id, arg2_id, true_label, dl_prob, dl_pred, split)
     - data/processed/dl_biocause_test_predictions.csv (1,394 rows; columns: candidate_id, article_id, section_id, arg1_id, arg2_id, true_label, dl_prob, dl_pred, split)
 
@@ -129,6 +130,7 @@ DL_01_data_preparation.ipynb
     - data/processed/aml_biocause_test_predictions.csv (Phase 1 AML prerequisite, 1,394 rows)
     - data/processed/dl_biocause_validation_predictions.csv (from DL_03, 1,884 rows)
     - data/processed/dl_biocause_test_predictions.csv (from DL_03, 1,394 rows)
+    - data/processed/dl_biocause_metrics.json (from DL_03)
     - data/processed/biocause_candidates.csv (Candidate metadata, 13,408 raw candidates)
     - data/processed/biocause_relations.csv (Gold relations: 852 total, 100 test)
   Outputs:
@@ -143,12 +145,15 @@ DL_01_data_preparation.ipynb
   Inputs:
     - data/processed/dl_corr2cause_test_predictions.csv (from DL_02)
     - data/processed/dl_biocause_test_predictions.csv (from DL_03)
+    - data/processed/dl_biocause_metrics.json (from DL_03)
     - data/processed/dl_biocause_hybrid_test_predictions.csv (from DL_04)
+    - data/processed/dl_biocause_fusion_config.json (from DL_04)
     - data/processed/biocause_relations.csv (Gold 100 test relations)
   Outputs:
     - reports/dl_final_benchmark_summary.csv
     - reports/dl_ablation_summary.csv
-    - High-resolution evaluation figures (PR curves, ROC curves, calibration plots)
+    - reports/dl_biocause_pr_roc_curves.png
+    - reports/dl_biocause_bayesian_dag_motif.png
 ```
 
 ---
@@ -207,8 +212,8 @@ Weights must **never** be derived using validation or test split labels.
 ### Validation Discipline
 Linear probability-score fusion combines model estimates:
 $$P_{\text{hybrid}} = \alpha \cdot P_{\text{DL}} + (1 - \alpha) \cdot P_{\text{AML}}$$
-- The blending parameter $\alpha \in [0, 1]$ and decision threshold $\tau$ are selected by sweeping $\alpha$ with step 0.05 strictly on the held-out validation articles (1,884 model-eligible candidate pairs; raw partition contains 1,914 candidate pairs).
-- Optimization uses a lexicographic tie-breaking rule: maximize validation positive-class F1; tie-break on validation Macro-F1; tie-break on smaller $\alpha$, then smaller $\tau$.
+- The blending parameter $\alpha \in [0, 1]$ and decision threshold $\tau$ are selected by sweeping $\alpha$ with step $0.05$ and candidate thresholds across $[0.01, 0.99]$ plus validation probability quantiles strictly on the held-out validation articles (1,884 model-eligible candidate pairs; raw partition contains 1,914 candidate pairs).
+- Optimization uses a deterministic tie-breaking hierarchy: maximize validation positive-class F1; tie-break on validation Macro-F1; tie-break on smaller $|\tau - 0.50|$, smaller $|\alpha - 0.50|$, smaller $\alpha$, and then higher $\tau$.
 - Test set predictions, test candidate metadata, and test labels are strictly isolated and evaluated **exactly once** using the frozen validation-selected $\alpha^*$ and $\tau^*$.
 - Probability-score fusion is empirically compared against both pure AML ($\alpha = 0$) and pure DL ($\alpha = 1$) baselines.
 
@@ -251,12 +256,12 @@ Both transformer models (`distilbert-base-uncased` and `microsoft/BiomedNLP-Biom
    ```bash
    pip install -r requirements-dl.txt
    ```
-5. **Memory and Quota Management (Conservative Initial Defaults)**:
-   - BioCause batch size: 8 (with gradient accumulation: 2).
+5. **Memory and Quota Management**:
+   - BioCause batch size: 8 (with gradient accumulation: 1; eval batch size: 16).
    - DistilBERT batch size: 16.
    - Mixed precision: enable `fp16=True` only when CUDA is available (do not enable on CPU or MPS).
    - Evaluation strategy: use modern `eval_strategy="epoch"` (replacing legacy `evaluation_strategy`).
-   - Set `save_total_limit=1` to prevent exhausting Kaggle's 20 GB disk quota with stale checkpoints.
+   - Set `save_total_limit=3` for BioCause (`load_best_model_at_end=False`) so all 3 epoch checkpoints remain available for joint `(checkpoint, threshold)` validation selection before temporary checkpoint cleanup.
 
 ### Google Colab Environment Setup
 1. **Runtime Type**: Navigate to `Runtime` > `Change runtime type` > select **T4 GPU**.
@@ -450,40 +455,41 @@ Tokenizer sequence lengths were profiled across both domains:
 
 ## 17. Task 5: End-to-End Benchmark Evaluation & Ablation Results
 
-`DL/DL_05_evaluation_ablation.ipynb` delivers the comprehensive cross-paradigm benchmark, 4-dimensional ablation analysis, and master artifact generation:
+`DL/DL_05_evaluation_ablation.ipynb` delivers the comprehensive cross-paradigm benchmark, 4-dimensional ablation analysis, and master artifact generation in `reports/`:
 
 ### 17.1 Master Benchmark Comparison (Held-Out Test N=1,394)
 All candidate-level evaluations strictly preserve the model-eligible test partition (1,394 candidates, 100 gold positive relations, 4 PMC articles):
 
-| Model Paradigm | TP | FP | FN | Accuracy | Pos Precision | Pos Recall | Pos F1 | Macro-F1 | PR-AUC |
-|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Phase 1 Lexical Baseline** | 0 | 0 | 100 | 0.9283 | 0.0000 | 0.0000 | 0.0000 | 0.4814 | - |
-| **Phase 1 AML (Logistic Regression 1:2)** | 33 | 49 | 67 | 0.9168 | 0.4024 | 0.3300 | 0.3626 | 0.6591 | 0.3500 |
-| **Phase 2 DL (PubMedBERT)** | 33 | 49 | 67 | 0.9168 | 0.4024 | 0.3300 | 0.3626 | 0.6591 | 0.3500 |
-| **Phase 2 Hybrid (Raw Fused)** | 47 | 79 | 53 | 0.9053 | 0.3730 | 0.4700 | 0.4159 | 0.6822 | 0.3500 |
-| **Phase 2 Hybrid (Sanitized)** | 44 | 70 | 56 | 0.9096 | 0.3860 | 0.4400 | 0.4112 | 0.6811 | 0.3500 |
+| Model Paradigm | Threshold | TP | FP | FN | TN | Accuracy | Pos Precision | Pos Recall | Pos F1 | Macro-F1 | ROC-AUC | PR-AUC |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Lexical baseline** | - | 7 | 339 | 93 | 955 | 0.6901 | 0.0202 | 0.0700 | 0.0314 | 0.4235 | - | - |
+| **AML (fixed 0.50)** | 0.5000 | 52 | 33 | 48 | 1261 | 0.9419 | 0.6118 | 0.5200 | 0.5622 | 0.7655 | 0.9431 | 0.6119 |
+| **AML-only (validation-selected)** | 0.5200 | 49 | 27 | 51 | 1267 | **0.9440** | **0.6447** | 0.4900 | 0.5568 | 0.7635 | 0.9431 | 0.6119 |
+| **PubMedBERT (`checkpoint-3723`, Epoch 3.0)** | 0.0273 | 80 | 228 | 20 | 1066 | 0.8221 | 0.2597 | **0.8000** | 0.3922 | 0.6440 | 0.8809 | 0.3130 |
+| **Validation-selected hybrid ($\alpha^*=0.45$)** | 0.3200 | 57 | 36 | 43 | 1258 | 0.9433 | 0.6129 | 0.5700 | **0.5907** | **0.7801** | **0.9448** | **0.6364** |
+| **Sanitized hybrid** | 0.3200 | 53 | 33 | 47 | 1261 | 0.9426 | 0.6163 | 0.5300 | 0.5699 | 0.7696 | 0.9448 | 0.6364 |
 
 ### 17.2 Independent Corr2Cause Stream Benchmark (N=1,162 Test Instances)
-- **Accuracy**: 87.09%
-- **Macro-F1**: 68.37% (Macro-Precision: 77.89%, Macro-Recall: 64.91%)
-- **Entailed (Class 1) F1**: 44.03% (Precision: 67.05%, Recall: 32.78%)
-- **ROC-AUC**: 0.9801 | **PR-AUC**: 0.9067
+- **Accuracy**: `0.8623` (`1002 / 1162`)
+- **Macro-F1**: `0.6791` (`Macro Precision`: `0.7423`, `Macro Recall`: `0.6508`)
+- **Entailed (Class 1) F1**: `0.4366` (`Pos Precision`: `0.5962`, `Pos Recall`: `0.3444`; `TP=62, FP=42, FN=118, TN=940`)
+- **ROC-AUC**: `0.8594` | **PR-AUC**: `0.5135`
 - **Disaggregated by Variable Count**:
-  - N=2: 6 instances, Acc=0.0000, Macro-F1=0.0000
-  - N=3: 48 instances, Acc=0.5208, Macro-F1=0.4318
-  - N=4: 72 instances, Acc=1.0000, Macro-F1=1.0000
-  - N=5: 514 instances, Acc=0.9981, Macro-F1=0.9950
-  - N=6: 522 instances, Acc=0.7701, Macro-F1=0.4351
+  - `N=2`: `6` instances (`TP=0, FP=1, FN=0, TN=5`), `Accuracy=0.8333`, `Pos F1=0.0000`, `Macro-F1=0.4545`
+  - `N=3`: `48` instances (`TP=3, FP=8, FN=0, TN=37`), `Accuracy=0.8333`, `Pos P=0.2727`, `Pos R=1.0000`, `Pos F1=0.4286`, `Macro-F1=0.6655`, `ROC-AUC=0.9111`, `PR-AUC=0.5278`
+  - `N=4`: `72` instances (`TP=0, FP=8, FN=0, TN=64`), `Accuracy=0.8889`, `Pos F1=0.0000`, `Macro-F1=0.4706`
+  - `N=5`: `514` instances (`TP=31, FP=17, FN=26, TN=440`), `Accuracy=0.9163`, `Pos P=0.6458`, `Pos R=0.5439`, `Pos F1=0.5905`, `Macro-F1=0.7719`, `ROC-AUC=0.9317`, `PR-AUC=0.6806`
+  - `N=6`: `522` instances (`TP=28, FP=8, FN=92, TN=394`), `Accuracy=0.8084`, `Pos P=0.7778`, `Pos R=0.2333`, `Pos F1=0.3590`, `Macro-F1=0.6232`, `ROC-AUC=0.7539`, `PR-AUC=0.5295`
 
-### 17.3 Core 4-Dimensional Ablation Results
-1. **Argument Markers**: Adding explicit `[E1]...[/E1]` and `[E2]...[/E2]` markers improved positive F1 from 0.3267 to 0.4161 (+8.94% absolute gain).
-2. **Dynamic Class Weighting**: Dynamic pos_weight = 14.9871 prevented catastrophic model collapse, improving positive F1 from 0.2503 (unweighted) to 0.4161.
-3. **Ensembling Paradigm**: Optimal validation-selected configuration is alpha* = 0.00, tau* = 0.35, yielding Macro-F1 of 0.6822. Because alpha* = 0.00, the selected hybrid relies on calibrated AML probabilities without claiming artificial DL gain.
-4. **Post-Processing Linguistic Sanity**: Applying negation filters pruned 12 spurious positive candidates containing explicit negation triggers in intervening context, increasing precision from 0.3730 to 0.3860.
+### 17.3 Core 4-Dimensional Ablation Results (`reports/dl_ablation_summary.csv`)
+1. **Argument Markers**: Removing `[E1]...[/E1]` and `[E2]...[/E2]` markers (`No entity markers`, `checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0566$) drops test Pos F1 from `0.3922` to `0.2660` (`-0.1262`), Pos Recall from `0.8000` to `0.5000`, ROC-AUC from `0.8809` to `0.7924`, and PR-AUC from `0.3130` to `0.2108`.
+2. **Dynamic Loss Weighting vs. Calibrated Thresholding**: At the default `0.50` `argmax` boundary, unweighted cross-entropy predicts `0` positives across all 3 epochs. Under joint validation epoch and threshold calibration (`Entity markers and unweighted loss`, `checkpoint-2482`, Epoch `2.0`, $\tau^* = 0.0439$), unweighted CE reaches higher standalone precision (`0.3659` vs. `0.2597`), Pos F1 (`0.4545` vs. `0.3922`), and PR-AUC (`0.3880` vs. `0.3130`), while dynamic class weighting (`pos_weight = 14.9871`) achieves substantially higher positive recall (`0.8000` vs. `0.6000`).
+3. **Ensembling Paradigm**: Validation-only grid search selects $\alpha^* = 0.45$, $\tau^* = 0.3200$ (`Val_Pos_F1 = 0.6400`, `Val_Macro_F1 = 0.8072`), outperforming `AML-only validation-selected` (test `Pos F1: 0.5907` vs. `0.5568`), `Pure AML (fixed 0.50)` (`0.5622`), and `Full model` (`0.3922`), while lifting `ROC-AUC` to `0.9448` and `PR-AUC` to `0.6364`.
+4. **Post-Processing Linguistic Sanity**: Negation filtering prunes `7` initial hybrid positive predictions (`93 -> 86`; `Pos Precision: 0.6129 -> 0.6163`, `Pos Recall: 0.5700 -> 0.5300`, candidate `Pos F1: 0.5907 -> 0.5699`).
 
 ### 17.4 Graph Topology & Causal Discovery Benchmark
-- **Gold Directed Causal Edges in Test Split**: 100 edges
-- **Raw Extracted Edges**: 114 edges (TP=44, FP=70, FN=56, Precision=0.3860, Recall=0.4400, F1=0.4112, Is DAG: False)
-- **Acyclic Causal DAG (Post Cycle-Breaking)**: 57 edges (TP=36, FP=21, FN=64, Precision=0.6316, Recall=0.3600, F1=0.4586, Is DAG: True)
-- **Pruning Audit**: 57 bidirectional conflicts resolved in favor of higher confidence; 0 self-loops; 0 cycle feedbacks.
-- **Probabilistic Bayesian Network**: Compiled using `pgmpy.DiscreteBayesianNetwork`. Demonstrates Pearl do-calculus distinguishing observational associative shifts (+0.2958) from interventional graph surgery causal effects (+0.4258).
+- **Gold Directed Causal Edges in Test Split**: `100` edges across `4` test articles
+- **Raw Extracted Edges (Pre-Pruning)**: `86` edges (`TP=53, FP=33, FN=47`, `Precision=0.6163`, `Recall=0.5300`, `F1=0.5699`, `Is DAG: False`)
+- **Acyclic Causal DAG (Post Cycle-Breaking)**: `79` edges (`TP=53, FP=26, FN=47`, `Precision=0.6709`, `Recall=0.5300`, `F1=0.5922`, `Is DAG: True`)
+- **Pruning Audit**: `7` bidirectional conflicts resolved (`0` self-loops, `0` cycle feedback edges) — all `7` removed edges were false positives while preserving all `53` true positives.
+- **Illustrative Bayesian Network Reasoning**: Compiled using `pgmpy.models.DiscreteBayesianNetwork` (`Sensor -> Regulator -> Resistance`) with explicitly synthetic CPDs demonstrating Pearl $do$-calculus (`Baseline P(Resistance=1) = 0.4242`, observational `P(Resistance=1 | Sensor=1) = 0.7200` [`+0.2958`], interventional `P(Resistance=1 | do(Regulator=1)) = 0.8500` [`+0.4258`]).
