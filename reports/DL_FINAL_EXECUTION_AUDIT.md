@@ -2,7 +2,7 @@
 
 - **Repository:** `alpha-sml/causal-nlp-reasoning`
 - **Branch:** `main`
-- **Latest Reference Commit:** `7612347059c83f807d08b0f0ff20407e41e84e3f`
+- **Latest Reference Commit:** `a649396` (`a649396c71989fe615f2f4847bdcc40a74bfeff7`)
 - **Date of Audit:** `2026-11-16`
 - **Status:** EVALUATION COMPLETE; MODEL WEIGHT PERSISTENCE & `.pkl` PACKAGING PENDING COLAB VERIFICATION
 
@@ -112,6 +112,10 @@ Evaluated on identical model-eligible test candidates ($N = 1,394$; $100$ positi
   - **Test Confusion Matrix** (`[[TN, FP], [FN, TP]]`): `[[1066, 228], [20, 80]]`
 
 ### 4. Hybrid Integration, Graph Refinement & Illustrative Do-Calculus (`DL_04` & `DL_05`)
+- **Experimental Progression (AML Baseline $\to$ PubMedBERT $\to$ Hybrid Fusion):**
+  - The Phase 1 AML baseline (`Logistic Regression Moderate Weight 1:2`) achieved strong ranking (`ROC-AUC = 0.9431`, `PR-AUC = 0.6119`) and precision (`0.6118` at `0.5000`; `0.6447` at `0.5200`), but limited recall (`0.5200` / `0.4900`, `Pos F1 = 0.5622` / `0.5568`).
+  - Fine-tuned PubMedBERT (`checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0273$) lifted test positive recall to `0.8000` (`TP=80`), but dynamic weighting (`14.9871x`) compressed raw probabilities (`val max = 0.3182`) and raised false positives (`FP=228`), yielding standalone `Pos Precision = 0.2597` and `Pos F1 = 0.3922`.
+  - Validation-only fusion ($\alpha^* = 0.45, \tau^* = 0.3200$) combined PubMedBERT's recall with AML's precision, lifting validation `Pos F1` to **`0.6400`** (`Val Macro-F1 = 0.8072`, `+0.0424` over tuned AML) and held-out test `Pos F1` to **`0.5907`** (`Macro-F1 = 0.7801`, `ROC-AUC = 0.9448`, `PR-AUC = 0.6364`). Hybrid selection rests on these observed validation and test gains without claiming statistical significance.
 - **Fusion Formula:**
   $$P_{\text{hybrid}}^{(i)} = \alpha \cdot P_{\text{DL}}^{(i)} + (1 - \alpha) \cdot P_{\text{AML}}^{(i)}$$
 - **Validation Parameter Selection ($N = 1,884$):**
@@ -209,11 +213,11 @@ Key ablation findings:
    - `README.md`
 3. **Deployable Hybrid Packaging & Config (`DL/` & `DL/models/hybrid_biocause/`):**
    - `DL/hybrid_inference.py`
-   - `DL/models/hybrid_biocause/fusion_config.json`
-   - `DL/models/hybrid_biocause/model_manifest.json`
-   - `DL/models/hybrid_biocause/README.md`
-   - `DL/models/hybrid_biocause/pubmedbert/` *(target binary dir, gitignored; pending Colab verification)*
-   - `DL/models/hybrid_biocause/aml_classifier.pkl` *(target Joblib pipeline, gitignored; pending Colab verification)*
+   - `DL/HYBRID_MODEL_PACKAGE.md` *(tracked package, loading & schema documentation)*
+   - `DL/models/hybrid_biocause/fusion_config.json` *(gitignored under `models/`)*
+   - `DL/models/hybrid_biocause/model_manifest.json` *(gitignored under `models/`)*
+   - `DL/models/hybrid_biocause/pubmedbert/` *(`model.safetensors` + `checkpoint_provenance.json`, gitignored; pending Colab verification)*
+   - `DL/models/hybrid_biocause/aml_classifier.pkl` *(Joblib pipeline, gitignored; pending Colab verification)*
 4. **Pipeline Prediction, Config & Graph Artifacts (Colab-generated in `data/processed/`):**
    - `data/processed/dl_corr2cause_test_predictions.csv`
    - `data/processed/dl_biocause_metrics.json`

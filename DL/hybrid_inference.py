@@ -232,6 +232,38 @@ def load_aml_pipeline(pkl_path: Union[str, Path]) -> Pipeline:
     return joblib.load(path)
 
 
+def verify_aml_pipeline_equivalence(
+    aml_pipeline: Pipeline,
+    candidates_csv_path: Union[str, Path],
+    val_pred_csv_path: Union[str, Path],
+    test_pred_csv_path: Union[str, Path],
+    atol: float = 1e-6,
+) -> Dict[str, float]:
+    """Verify serialized AML pipeline matches exported validation and test `aml_prob`."""
+    df_cands_all = pd.read_csv(candidates_csv_path, keep_default_na=False).set_index("candidate_id")
+    df_val_ref = pd.read_csv(val_pred_csv_path)
+    df_test_ref = pd.read_csv(test_pred_csv_path)
+
+    val_inputs = df_cands_all.loc[df_val_ref["candidate_id"]].reset_index()
+    test_inputs = df_cands_all.loc[df_test_ref["candidate_id"]].reset_index()
+
+    val_probs = np.asarray(aml_pipeline.predict_proba(val_inputs)[:, 1], dtype=np.float64)
+    test_probs = np.asarray(aml_pipeline.predict_proba(test_inputs)[:, 1], dtype=np.float64)
+
+    val_max_diff = float(np.max(np.abs(val_probs - df_val_ref["aml_prob"].to_numpy())))
+    test_max_diff = float(np.max(np.abs(test_probs - df_test_ref["aml_prob"].to_numpy())))
+
+    if val_max_diff > atol:
+        raise AssertionError(
+            f"AML pipeline validation probability mismatch (max_diff={val_max_diff:.2e} > {atol})"
+        )
+    if test_max_diff > atol:
+        raise AssertionError(
+            f"AML pipeline test probability mismatch (max_diff={test_max_diff:.2e} > {atol})"
+        )
+    return {"val_max_abs_diff": val_max_diff, "test_max_abs_diff": test_max_diff}
+
+
 def collect_artifact_inventory(directory: Union[str, Path]) -> List[Dict[str, Any]]:
     """Collect relative filenames and byte sizes for saved model artifacts."""
     root = Path(directory)
@@ -255,13 +287,15 @@ def persist_and_verify_pubmedbert(
     output_dirs: Sequence[Union[str, Path]],
     sample_texts: Optional[Sequence[str]] = None,
     max_length: int = 384,
+    provenance: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Save a frozen PubMedBERT checkpoint with SafeTensors, reload, and verify inference.
+    """Save a frozen PubMedBERT checkpoint strictly as SafeTensors, reload, and verify.
 
     Moves the model cleanly to CPU before serialization to avoid GPU OOM / kernel crashes
-    during shard writing, verifies required config/weight/tokenizer files, reloads from
-    disk, checks architecture/vocabulary/head dimensions, and optionally runs a tiny
-    deterministic inference sanity check without test labels.
+    during shard writing, requires `model.safetensors` (`safe_serialization=True`),
+    records `checkpoint_provenance.json`, reloads from disk, verifies architecture,
+    vocabulary, and head dimensions, and runs a deterministic inference sanity check
+    without test labels.
     """
     import gc
     import torch
@@ -292,21 +326,32 @@ def persist_and_verify_pubmedbert(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
+    prov_payload: Dict[str, Any] = {
+        "selected_checkpoint": str(ckpt_dir),
+        "selected_checkpoint_name": ckpt_dir.name,
+        "weight_format": "safetensors",
+    }
+    if provenance:
+        prov_payload.update(provenance)
+
     inventory_all: List[Dict[str, Any]] = []
     for out_dir_raw in output_dirs:
         out_dir = Path(out_dir_raw)
         out_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            model.save_pretrained(str(out_dir), safe_serialization=True)
-        except Exception:
-            model.save_pretrained(str(out_dir), safe_serialization=False)
+        stale_bin = out_dir / "pytorch_model.bin"
+        if stale_bin.exists():
+            stale_bin.unlink()
+
+        model.save_pretrained(str(out_dir), safe_serialization=True)
         tokenizer.save_pretrained(str(out_dir))
+        (out_dir / "checkpoint_provenance.json").write_text(
+            json.dumps(prov_payload, indent=2) + "\n"
+        )
 
         assert (out_dir / "config.json").is_file(), f"Missing config.json in {out_dir}"
-        has_weights = (out_dir / "model.safetensors").is_file() or (
-            out_dir / "pytorch_model.bin"
-        ).is_file()
-        assert has_weights, f"Missing SafeTensors or PyTorch weights file in {out_dir}"
+        assert (out_dir / "model.safetensors").is_file(), (
+            f"Required SafeTensors weights file missing in {out_dir}"
+        )
         has_tok = (out_dir / "tokenizer_config.json").is_file() and (
             (out_dir / "vocab.txt").is_file() or (out_dir / "tokenizer.json").is_file()
         )

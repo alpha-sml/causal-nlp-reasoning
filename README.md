@@ -92,6 +92,11 @@ Execute the five Phase 2 notebooks sequentially (GPU runtime recommended for `DL
 
 ### At-a-Glance Phase 2 Results (Held-Out Test Splits)
 
+#### Why Hybrid Fusion Was Selected (AML Baseline $\to$ PubMedBERT $\to$ Hybrid Fusion)
+1. **Phase 1 AML Baseline (`Logistic Regression (Moderate Weight 1:2)`)**: Structural, lexical, and TF-IDF features provide strong precision and ranking (`ROC-AUC = 0.9431`, `PR-AUC = 0.6119`), but limited recall (`Pos F1 = 0.5622`, `Pos Precision = 0.6118`, `Pos Recall = 0.5200` at fixed `0.5000`; `Pos F1 = 0.5568`, `Pos Precision = 0.6447`, `Pos Recall = 0.4900` at validation-selected `0.5200`, `Val Pos F1 = 0.5976`).
+2. **Phase 2 PubMedBERT (`checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0273$)**: Fine-tuned transformer representations capture broader contextual patterns and achieve the highest positive recall (`0.8000` test, `TP=80`), but dynamic class weighting (`9307 / 621 = 14.9871`) compresses raw probabilities (`val max = 0.3182`) and increases false positives (`FP=228`), lowering standalone `Pos Precision` (`0.2597`), `Pos F1` (`0.3922`), and `PR-AUC` (`0.3130`).
+3. **Hybrid Fusion ($\alpha^* = 0.45$, $\tau^* = 0.3200$)**: Validation-only grid search selected $P_{\text{hybrid}} = 0.45 P_{\text{DL}} + 0.55 P_{\text{AML}}$ because combining PubMedBERT's recall with AML's precision raised validation `Pos F1` to **`0.6400`** (`Val Macro-F1 = 0.8072`, `+0.0424` over tuned AML) and held-out test `Pos F1` to **`0.5907`** (`Macro-F1 = 0.7801`, `ROC-AUC = 0.9448`, `PR-AUC = 0.6364`). Selection is based on these observed validation and test gains without claiming statistical significance.
+
 #### BioCause Candidate-Level Benchmark ($N = 1,394$ Model-Eligible Candidates, $100$ Positives)
 | Model Paradigm | Threshold | TP | FP | FN | TN | Accuracy | Pos Precision | Pos Recall | Pos F1 | Macro-F1 | ROC-AUC | PR-AUC |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -112,8 +117,8 @@ Execute the five Phase 2 notebooks sequentially (GPU runtime recommended for `DL
   - **Illustrative Bayesian Network Demonstration**: `DL_04` (Section 8) and `DL_05` (Section 7) compile small synthetic-CPD motifs in `pgmpy.models.DiscreteBayesianNetwork` (`Sensor -> Regulator -> Resistance`: baseline `0.4242` vs. observational `0.7200` vs. `do(Regulator=1) = 0.8500`) solely to demonstrate Pearl's $do$-calculus separately from empirical corpus counts.
 
 ### Deployable Hybrid BioCause Package (`DL/models/hybrid_biocause/`)
-Packaging metadata, configuration, and reusable inference code live in [`DL/hybrid_inference.py`](DL/hybrid_inference.py) and [`DL/models/hybrid_biocause/README.md`](DL/models/hybrid_biocause/README.md):
-- `pubmedbert/` — PubMedBERT model (`model.safetensors`, `config.json`) + marker tokenizer (never pickled).
+Packaging metadata, configuration, and reusable inference code live in [`DL/hybrid_inference.py`](DL/hybrid_inference.py) and [`DL/HYBRID_MODEL_PACKAGE.md`](DL/HYBRID_MODEL_PACKAGE.md):
+- `pubmedbert/` — PubMedBERT model (strict SafeTensors `model.safetensors`, `config.json`, `checkpoint_provenance.json`) + marker tokenizer (never pickled).
 - `aml_classifier.pkl` — Joblib-serialized sklearn `Pipeline` (`BioCauseAMLFeatureExtractor` + `LogisticRegression(class_weight={0: 1.0, 1: 2.0})`).
 - `fusion_config.json` & `model_manifest.json` — Frozen validation parameters (`alpha_star = 0.45`, `threshold_star = 0.32`), feature specs, split counts, and persistence status.
 
@@ -155,6 +160,7 @@ causal-nlp-reasoning/
 │   └── AML_05_integration_evaluation.ipynb# End-to-end 3-pathway benchmark & acceptance gate
 ├── DL/                                 # Phase 2: Deep Learning & Transformer Pipeline
 │   ├── README.md                       # Phase 2 architecture, contracts, execution & technical scope
+│   ├── HYBRID_MODEL_PACKAGE.md         # Tracked hybrid model packaging, loading & schema guide
 │   ├── dl_utils.py                     # Shared utilities, schemas, seed, device & evaluation helpers
 │   ├── hybrid_inference.py             # Reusable AML feature pipeline, packaging & hybrid inference API
 │   ├── DL_01_data_preparation.ipynb    # Data schemas, 12/4/4 split audit & entity boundary markers
@@ -192,4 +198,4 @@ pip install -r requirements-dl.txt
 python tests/test_phase1_baseline.py
 ```
 
-All 7 Phase 1 notebooks (`00_setup.ipynb`, `01_eda.ipynb`, and `AML/AML_01` through `AML/AML_05`) are pre-executed with **100% (`85/85`) visible cell outputs and inline plots** saved directly inside the `.ipynb` files. Phase 2 notebooks (`DL_01` through `DL_05`) were executed sequentially in Google Colab with results reconciled in [`reports/DL_FINAL_EXECUTION_AUDIT.md`](reports/DL_FINAL_EXECUTION_AUDIT.md); follow [`DL/models/hybrid_biocause/README.md`](DL/models/hybrid_biocause/README.md) to verify final model weight persistence (`model.safetensors`) and Joblib `.pkl` packaging in Colab.
+All 7 Phase 1 notebooks (`00_setup.ipynb`, `01_eda.ipynb`, and `AML/AML_01` through `AML/AML_05`) are pre-executed with **100% (`85/85`) visible cell outputs and inline plots** saved directly inside the `.ipynb` files. Phase 2 notebooks (`DL_01` through `DL_05`) were executed sequentially in Google Colab with results reconciled in [`reports/DL_FINAL_EXECUTION_AUDIT.md`](reports/DL_FINAL_EXECUTION_AUDIT.md); follow [`DL/HYBRID_MODEL_PACKAGE.md`](DL/HYBRID_MODEL_PACKAGE.md) to verify final model weight persistence (`model.safetensors`) and Joblib `.pkl` packaging in Colab.

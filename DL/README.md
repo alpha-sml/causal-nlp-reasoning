@@ -460,7 +460,12 @@ Tokenizer sequence lengths were profiled across both domains:
 `DL/DL_05_evaluation_ablation.ipynb` delivers the comprehensive cross-paradigm benchmark, 4-dimensional ablation analysis, and master artifact generation in `reports/`:
 
 ### 17.1 Master Benchmark Comparison (Held-Out Test N=1,394)
-All candidate-level evaluations strictly preserve the model-eligible test partition (1,394 candidates, 100 gold positive relations, 4 PMC articles):
+All candidate-level evaluations strictly preserve the model-eligible test partition (1,394 candidates, 100 gold positive relations, 4 PMC articles).
+
+**Experimental Progression (AML Baseline $\to$ PubMedBERT $\to$ Hybrid Fusion):**
+- **AML Baseline (`Logistic Regression Moderate Weight 1:2`)** establishes high ranking quality (`ROC-AUC = 0.9431`, `PR-AUC = 0.6119`) and precision (`0.6118` at `0.5000`; `0.6447` at validation-selected `0.5200`), but misses roughly half of positive relations (`Pos Recall = 0.5200` / `0.4900`, `Pos F1 = 0.5622` / `0.5568`).
+- **PubMedBERT (`checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0273$)** recovers `80` of `100` gold causal pairs (`Pos Recall = 0.8000`), but dynamic loss weighting (`14.9871x`) yields compressed probabilities (`val max = 0.3182`) and `228` false positives (`Pos Precision = 0.2597`, `Pos F1 = 0.3922`, `Val Pos F1 = 0.3701`).
+- **Hybrid Fusion ($\alpha^* = 0.45$, $\tau^* = 0.3200$)** combines PubMedBERT's contextual recall with AML's structural precision, raising validation `Pos F1` to **`0.6400`** (`Val Macro-F1 = 0.8072`, `+0.0424` over tuned AML) and held-out test `Pos F1` to **`0.5907`** (`Macro-F1 = 0.7801`, `ROC-AUC = 0.9448`, `PR-AUC = 0.6364`). Selection reflects these observed validation and test improvements without claiming statistical significance.
 
 | Model Paradigm | Threshold | TP | FP | FN | TN | Accuracy | Pos Precision | Pos Recall | Pos F1 | Macro-F1 | ROC-AUC | PR-AUC |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -501,8 +506,8 @@ All candidate-level evaluations strictly preserve the model-eligible test partit
 ## 18. Deployable Hybrid Model Package (`DL/models/hybrid_biocause/`) & Persistence Workflow
 
 ### Package Structure & `.gitignore` Policy
-The deployable hybrid BioCause bundle is targeted at `DL/models/hybrid_biocause/`:
-- `pubmedbert/`: Frozen PubMedBERT (`checkpoint-3723`, Epoch `3.0`) saved with SafeTensors (`model.safetensors`, `config.json`) and marker-augmented tokenizer (`[E1]`, `[/E1]`, `[E2]`, `[/E2]`), loaded via HuggingFace `from_pretrained()`.
+The deployable hybrid BioCause bundle is targeted at `DL/models/hybrid_biocause/` (documented in [`DL/HYBRID_MODEL_PACKAGE.md`](HYBRID_MODEL_PACKAGE.md)):
+- `pubmedbert/`: Frozen PubMedBERT (`checkpoint-3723`, Epoch `3.0`) saved strictly as SafeTensors (`model.safetensors`, `config.json`, `checkpoint_provenance.json`) and marker-augmented tokenizer (`[E1]`, `[/E1]`, `[E2]`, `[/E2]`), loaded via HuggingFace `from_pretrained()`.
 - `aml_classifier.pkl`: Complete Joblib-serialized sklearn `Pipeline` (`hybrid_inference.BioCauseAMLFeatureExtractor` + `LogisticRegression(class_weight={0: 1.0, 1: 2.0}, C=1.0, max_iter=200, random_state=42)`) fitted strictly on raw training candidates (`10,086` rows).
 - `fusion_config.json`: Frozen validation-selected fusion configuration ($\alpha^* = 0.45$, $\tau^* = 0.3200$, $\tau_{\text{AML}}^* = 0.5200$, $\tau_{\text{DL}}^* = 0.0273$).
 - `model_manifest.json`: Model versions, training hyperparameters, authoritative split counts, and persistence verification status.
