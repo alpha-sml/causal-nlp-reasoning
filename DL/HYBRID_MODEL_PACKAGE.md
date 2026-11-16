@@ -17,19 +17,18 @@ Across identical held-out BioCause test candidates (`N = 1,394`; `100` positive,
 
 ```text
 DL/models/hybrid_biocause/
-├── pubmedbert/                     # Generated in Colab: SafeTensors weights + tokenizer
-│   ├── config.json
-│   ├── model.safetensors           # Required SafeTensors format (no .bin fallback)
-│   ├── checkpoint_provenance.json  # Records selected_checkpoint_name, step, epoch, threshold
-│   ├── tokenizer_config.json
-│   ├── special_tokens_map.json
-│   └── vocab.txt
-├── aml_classifier.pkl              # Generated in Colab: Joblib-serialized sklearn Pipeline
-├── fusion_config.json              # Frozen fusion parameters (alpha_star=0.25, threshold_star=0.44)
-├── model_manifest.json             # Provenance, split counts, and reload_and_inference_verified=true
+├── pubmedbert/                     # Committed SafeTensors weights + tokenizer
+│   ├── config.json                 # 691 bytes
+│   ├── model.safetensors           # 437,970,936 bytes / 417.68 MB (tracked via Git LFS in .gitattributes)
+│   ├── checkpoint_provenance.json  # 275 bytes (checkpoint-3723, Epoch 3.0, step 3723, tau*=0.16)
+│   ├── tokenizer.json              # 706,844 bytes
+│   └── tokenizer_config.json       # 539 bytes
+├── aml_classifier.pkl              # 6,708 bytes (Joblib-serialized sklearn Pipeline)
+├── fusion_config.json              # 2,155 bytes (alpha_star=0.25, threshold_star=0.44)
+└── model_manifest.json             # 2,126 bytes (reload_and_inference_verified=true)
 ```
 
-Per `.gitignore`, `DL/models/hybrid_biocause/` (including `model.safetensors` and `aml_classifier.pkl`) is **tracked** (not ignored), while training `checkpoints/`, `**/checkpoint-*/`, `*.pt`, `*.pth`, and `*.bin` remain excluded. Because `model.safetensors` (`417.68 MB`) exceeds GitHub's `100 MB` regular file limit, use **Git LFS** (`git lfs track "DL/models/hybrid_biocause/pubmedbert/model.safetensors"`) before pushing to GitHub. All code required to reproduce and verify the package is tracked in [`DL/hybrid_inference.py`](hybrid_inference.py), [`DL/DL_03_biocause_pubmedbert.ipynb`](DL_03_biocause_pubmedbert.ipynb), and [`DL/DL_04_hybrid_graph_integration.ipynb`](DL_04_hybrid_graph_integration.ipynb).
+Per `.gitignore` and `.gitattributes`, `DL/models/hybrid_biocause/` (including `aml_classifier.pkl` and `model.safetensors` via **Git LFS**) is **tracked and committed** in the repository, while training `checkpoints/`, `**/checkpoint-*/`, `*.pt`, `*.pth`, and `*.bin` remain excluded. Ensure `git-lfs` is installed when cloning or pulling the repository so `model.safetensors` resolves to the full weights rather than an LFS pointer. All code required to reproduce and verify the package is tracked in [`DL/hybrid_inference.py`](hybrid_inference.py), [`DL/DL_03_biocause_pubmedbert.ipynb`](DL_03_biocause_pubmedbert.ipynb), and [`DL/DL_04_hybrid_graph_integration.ipynb`](DL_04_hybrid_graph_integration.ipynb).
 
 ---
 

@@ -125,7 +125,7 @@ Packaging metadata, verified model binaries, and reusable inference code live in
 - `fusion_config.json` & `model_manifest.json` — Frozen validation parameters (`alpha_star = 0.25`, `threshold_star = 0.44`), feature specs, split counts, AML equivalence checks (`val_max_abs_diff = 1.11e-16`, `test_max_abs_diff = 1.00e-16`), and verified persistence status (`reload_and_inference_verified: true`).
 
 > [!NOTE] Binary Persistence & Security Policy
-> `.gitignore` is configured to **track** `DL/models/hybrid_biocause/` (including `model.safetensors` and `aml_classifier.pkl`) while keeping training `checkpoints/`, `*.pt`, `*.pth`, and `*.bin` ignored. Because `model.safetensors` is `417.68 MB` (above GitHub's `100 MB` regular file limit), use **Git LFS** (`git lfs track "DL/models/hybrid_biocause/pubmedbert/model.safetensors"`) before pushing to GitHub. Load `aml_classifier.pkl` only from trusted, verified project outputs because Joblib/pickle deserialization can execute arbitrary code.
+> `.gitignore` is configured to **track** `DL/models/hybrid_biocause/` (including `model.safetensors` and `aml_classifier.pkl`) while keeping training `checkpoints/`, `*.pt`, `*.pth`, and `*.bin` ignored. `.gitattributes` already tracks `DL/models/hybrid_biocause/pubmedbert/model.safetensors` (`417.68 MB`) via **Git LFS** (ensure `git-lfs` is installed when cloning/pulling). Load `aml_classifier.pkl` only from trusted, verified project outputs because Joblib/pickle deserialization can execute arbitrary code.
 
 ```python
 import joblib
