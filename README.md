@@ -89,6 +89,8 @@ Execute the five Phase 2 notebooks sequentially (GPU runtime recommended for `DL
 - **Illustrative Bayesian DAG Motif**: [`reports/dl_biocause_bayesian_dag_motif.png`](reports/dl_biocause_bayesian_dag_motif.png)
 - **Master Benchmark CSV**: [`reports/dl_final_benchmark_summary.csv`](reports/dl_final_benchmark_summary.csv)
 - **Systematic Ablation CSV**: [`reports/dl_ablation_summary.csv`](reports/dl_ablation_summary.csv)
+- **Phase 2 Technical Report (PDF)**: [`reports/dl_report.pdf`](reports/dl_report.pdf)
+- **Phase 2 Presentation (PPTX)**: [`reports/dl_phase.pptx`](reports/dl_phase.pptx)
 
 ![BioCause Precision-Recall and ROC Curves](reports/dl_biocause_pr_roc_curves.png)
 
@@ -171,12 +173,18 @@ causal-nlp-reasoning/
 │   ├── DL_04_hybrid_graph_integration.ipynb # Validation fusion, DAG reasoning, .pkl & bundle packaging
 │   ├── DL_05_evaluation_ablation.ipynb # Comparative evaluation, ablation studies & final reporting
 │   └── models/hybrid_biocause/         # Packaged hybrid deployment config, manifest & target model dir
-├── reports/                            # Benchmark CSVs, ablation CSV, PR/ROC & DAG figures, audit report
+├── reports/                            # Benchmark CSVs, ablation CSV, figures, reports & audit
 │   ├── DL_FINAL_EXECUTION_AUDIT.md     # Reconciled Phase 2 execution & persistence audit report
 │   ├── dl_final_benchmark_summary.csv  # BioCause candidate-level benchmark comparison
 │   ├── dl_ablation_summary.csv         # 7-row executed ablation study summary
 │   ├── dl_biocause_pr_roc_curves.png   # Comparative PR & ROC curve plot
-│   └── dl_biocause_bayesian_dag_motif.png # Illustrative 3-node Bayesian do-calculus diagram
+│   ├── dl_biocause_model_comparison.png # Model paradigm Pos F1 & TP/FP comparison
+│   ├── dl_biocause_confusion_matrices.png # Held-out test confusion matrices
+│   ├── dl_biocause_bayesian_dag_motif.png # Illustrative 3-node Bayesian do-calculus diagram
+│   ├── dl_report.pdf                   # Phase 2 deep learning & hybrid pipeline report
+│   ├── dl_phase.pptx                   # Phase 2 presentation deck
+│   ├── aml_report.pdf                  # Phase 1 AML technical report
+│   └── aml_phase.pptx                  # Phase 1 presentation deck
 ├── tests/
 │   └── test_phase1_baseline.py         # 16 automated unit, corpus, metric & notebook verification tests
 ├── requirements.txt                    # Phase 1 dependencies
