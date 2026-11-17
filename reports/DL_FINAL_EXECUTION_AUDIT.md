@@ -2,9 +2,10 @@
 
 - **Repository:** `alpha-sml/causal-nlp-reasoning`
 - **Branch:** `main`
-- **Latest Reference Commit:** `4d424f1` (`4d424f115d7c3164c3f5b334a13f61d62470b8d3`)
-- **Date of Audit:** `2026-11-16`
-- **Status:** EVALUATION, MODEL PERSISTENCE & HYBRID PACKAGING VERIFIED
+- **Model & Artifact Verification Baseline Commit:** `4d424f1` (`4d424f115d7c3164c3f5b334a13f61d62470b8d3`)
+- **Latest Repository State at Audit Sync:** `e67ffd5` (`e67ffd5551d13b04a31fff832991afe75b3e89c0`)
+- **Date of Audit:** `2026-11-17`
+- **Status:** EVALUATION, MODEL PERSISTENCE & HYBRID PACKAGING VERIFIED (`reports/dl_report.pdf` SOURCE UNAVAILABLE)
 
 ---
 
@@ -28,11 +29,11 @@
 ### 2. Notebook Execution Register
 | Notebook | Scope | Executed Outputs Status | Persistence / Packaging Status |
 | :--- | :--- | :--- | :--- |
-| `DL/DL_01_data_preparation.ipynb` | Tokenization, entity marking, BioCause split manifest creation | **Executed** | `dl_{corr2cause,biocause}_{train,val,test}.csv` generated locally (`data/processed/` gitignored) |
-| `DL/DL_02_corr2cause_distilbert.ipynb` | DistilBERT fine-tuning and evaluation on Corr2Cause | **Executed** | `dl_corr2cause_test_predictions.csv` generated locally (`data/processed/` gitignored) |
-| `DL/DL_03_biocause_pubmedbert.ipynb` | PubMedBERT fine-tuning, joint epoch/threshold selection, SafeTensors save & verify | **Executed (`10` code cells, `0` errors)** | `DL/models/hybrid_biocause/pubmedbert/` (`model.safetensors` via Git LFS) **verified** |
-| `DL/DL_04_hybrid_graph_integration.ipynb` | Validation fusion grid search, frozen test eval, DAG pruning, hybrid packaging | **Executed (`11` code cells, `0` errors)** | `aml_classifier.pkl`, `fusion_config.json`, `model_manifest.json`, reload check **verified** |
-| `DL/DL_05_evaluation_ablation.ipynb` | Global benchmark evaluation, 4D ablations, causal Bayesian reasoning | **Executed (`10` code cells, `0` errors)** | Benchmark/ablation CSVs & 4 PNGs committed in `reports/` |
+| `DL/DL_01_data_preparation.ipynb` | Tokenization, entity marking, BioCause split manifest creation | **Executed (`21/21` code cells)** | `dl_{corr2cause,biocause}_{train,val,test}.csv` generated locally (`data/processed/` gitignored) |
+| `DL/DL_02_corr2cause_distilbert.ipynb` | DistilBERT fine-tuning and evaluation on Corr2Cause | **Executed (`9/9` code cells)** | `dl_corr2cause_test_predictions.csv` local (`data/processed/` gitignored); `dl_corr2cause_confusion_matrix.png` in `reports/` |
+| `DL/DL_03_biocause_pubmedbert.ipynb` | PubMedBERT fine-tuning, joint epoch/threshold selection, SafeTensors save & verify | **Executed (`10/10` code cells, `0` errors)** | `DL/models/hybrid_biocause/pubmedbert/` (`model.safetensors` via Git LFS) **verified** |
+| `DL/DL_04_hybrid_graph_integration.ipynb` | Validation fusion grid search, frozen test eval, DAG pruning, hybrid packaging | **Executed (`11/11` code cells, `0` errors)** | `aml_classifier.pkl`, `fusion_config.json`, `model_manifest.json`, reload check **verified** |
+| `DL/DL_05_evaluation_ablation.ipynb` | Global benchmark evaluation, 4D ablations, causal Bayesian reasoning | **Executed (`10/10` code cells, `0` errors)** | Benchmark/ablation CSVs & 4 PNGs committed in `reports/` |
 
 ---
 
@@ -69,22 +70,22 @@ All retained notebook outputs reflect genuine Google Colab executions:
 
 ### 2. Corr2Cause Benchmark (DistilBERT — `DL_02` & `DL_05`)
 - **Model:** `distilbert-base-uncased` fine-tuned on causal NLI premise-hypothesis pairs.
-- **Validation Selection:** Epoch `3.0` (`validation_loss = 0.3651`, `validation_accuracy = 0.8745`, `validation_precision = 0.7137`, `validation_recall = 0.6277`, `validation_macro_f1 = 0.6541`, `validation_roc_auc = 0.8440`, `validation_pr_auc = 0.3895`).
+- **Validation Selection:** Epoch `3.0` (`validation_loss = 0.3334`, `validation_accuracy = 0.8838`, `validation_precision = 0.7518`, `validation_recall = 0.6361`, `validation_macro_f1 = 0.6688`, `validation_roc_auc = 0.8545`, `validation_pr_auc = 0.4437`).
 - **Held-Out Test Performance ($N = 1,162$):**
-  - **Accuracy:** $0.8623$ ($1002 / 1162$)
-  - **Positive (Class 1 Entailed):** Precision = $0.5962$, Recall = $0.3444$, Pos F1 = $0.4366$
-  - **Macro Metrics:** Precision = $0.7423$, Recall = $0.6508$, Macro-F1 = $0.6791$
-  - **ROC-AUC:** $0.8594$ | **PR-AUC:** $0.5135$
+  - **Accuracy:** $0.8718$ ($1013 / 1162$)
+  - **Positive (Class 1 Entailed):** Precision = $0.6476$, Recall = $0.3778$, Pos F1 = $0.4772$
+  - **Macro Metrics:** Precision = $0.7708$, Recall = $0.6700$, Macro-F1 = $0.7021$
+  - **ROC-AUC:** $0.8794$ | **PR-AUC:** $0.5957$
   - **Confusion Matrix** (`[[TN, FP], [FN, TP]]`):
-    $$\begin{pmatrix} 940 & 42 \\ 118 & 62 \end{pmatrix}$$
+    $$\begin{pmatrix} 945 & 37 \\ 112 & 68 \end{pmatrix}$$
 - **Disaggregated by `num_variables`:**
   | Scope | Examples | TP | FP | FN | TN | Accuracy | Pos Precision | Pos Recall | Pos F1 | Macro F1 | ROC-AUC | PR-AUC |
   | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
   | `num_variables = 2` | 6 | 0 | 1 | 0 | 5 | 0.8333 | 0.0000 | 0.0000 | 0.0000 | 0.4545 | - | - |
-  | `num_variables = 3` | 48 | 3 | 8 | 0 | 37 | 0.8333 | 0.2727 | 1.0000 | 0.4286 | 0.6655 | 0.9111 | 0.5278 |
-  | `num_variables = 4` | 72 | 0 | 8 | 0 | 64 | 0.8889 | 0.0000 | 0.0000 | 0.0000 | 0.4706 | - | - |
-  | `num_variables = 5` | 514 | 31 | 17 | 26 | 440 | 0.9163 | 0.6458 | 0.5439 | 0.5905 | 0.7719 | 0.9317 | 0.6806 |
-  | `num_variables = 6` | 522 | 28 | 8 | 92 | 394 | 0.8084 | 0.7778 | 0.2333 | 0.3590 | 0.6232 | 0.7539 | 0.5295 |
+  | `num_variables = 3` | 48 | 3 | 7 | 0 | 38 | 0.8542 | 0.3000 | 1.0000 | 0.4615 | 0.6886 | 0.9778 | 0.8333 |
+  | `num_variables = 4` | 72 | 0 | 1 | 0 | 71 | 0.9861 | 0.0000 | 0.0000 | 0.0000 | 0.4965 | - | - |
+  | `num_variables = 5` | 514 | 36 | 22 | 21 | 435 | 0.9163 | 0.6207 | 0.6316 | 0.6261 | 0.7895 | 0.9423 | 0.7074 |
+  | `num_variables = 6` | 522 | 29 | 6 | 91 | 396 | 0.8142 | 0.8286 | 0.2417 | 0.3742 | 0.6325 | 0.7666 | 0.5497 |
 - **Data Isolation:** Strict isolation maintained; Corr2Cause data is never mixed into BioCause biomedical relation extraction or graph synthesis.
 
 ### 3. BioCause Relation Extraction Benchmark (`DL_03`–`DL_05`)
@@ -190,6 +191,7 @@ Key ablation findings:
 2. **Low Probability Calibration in Weighted PubMedBERT:** Under dynamic positive class weighting ($14.9871\times$), raw softmax probabilities on validation remain compressed (`max = 0.5028`), requiring validation-selected thresholding ($\tau^* = 0.1600$) rather than a naive $0.50$ cutoff.
 3. **Joblib / Pickle Trust Boundary:** `aml_classifier.pkl` uses Joblib serialization and must only be loaded from trusted, project-verified sources (`DL/hybrid_inference.py`).
 4. **Git LFS Requirement for Cloning Weights:** `DL/models/hybrid_biocause/pubmedbert/model.safetensors` (`417.68 MB`) is stored via Git LFS (`.gitattributes`), so cloning environments must have `git-lfs` installed to pull the full SafeTensors weights rather than the LFS pointer.
+5. **Missing Editable Source for `reports/dl_report.pdf`:** No editable source file (`.tex`, `.docx`, `.qmd`, `.typ`, `.rmd`) for `reports/dl_report.pdf` exists in the repository, so `reports/dl_report.pdf` was not fabricated or modified. Consequently, `reports/dl_report.pdf` (Page 1 Abstract, Page 2 Section V.A, Page 4 Section VII.A & Fig. 6, Page 5 Table II, Page 6 Section X) still reflects the earlier DistilBERT run (`0.8623` test accuracy, `0.6791` macro-F1, `0.4366` pos F1) rather than the latest `DL_02`/`DL_05` results (`0.8718` accuracy, `0.7021` macro-F1, `0.4772` pos F1); updating it requires supplying the original editable document source.
 
 ---
 
@@ -208,7 +210,9 @@ Key ablation findings:
    - `reports/dl_biocause_pr_roc_curves.png`
    - `reports/dl_biocause_model_comparison.png`
    - `reports/dl_biocause_confusion_matrices.png`
+   - `reports/dl_corr2cause_confusion_matrix.png`
    - `reports/dl_biocause_bayesian_dag_motif.png`
+   - `reports/dl_report.pdf` & `reports/dl_phase.pptx`
    - `DL/README.md`
    - `README.md`
 3. **Committed Deployable Hybrid Package (`DL/`, `DL/models/hybrid_biocause/`, `.gitattributes`):**

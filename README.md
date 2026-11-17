@@ -87,6 +87,7 @@ Execute the five Phase 2 notebooks sequentially (GPU runtime recommended for `DL
 - **Model Paradigm Comparison (F1 & TP/FP)**: [`reports/dl_biocause_model_comparison.png`](reports/dl_biocause_model_comparison.png)
 - **Held-Out Test Confusion Matrices**: [`reports/dl_biocause_confusion_matrices.png`](reports/dl_biocause_confusion_matrices.png)
 - **Illustrative Bayesian DAG Motif**: [`reports/dl_biocause_bayesian_dag_motif.png`](reports/dl_biocause_bayesian_dag_motif.png)
+- **Corr2Cause DistilBERT Confusion Matrix**: [`reports/dl_corr2cause_confusion_matrix.png`](reports/dl_corr2cause_confusion_matrix.png)
 - **Master Benchmark CSV**: [`reports/dl_final_benchmark_summary.csv`](reports/dl_final_benchmark_summary.csv)
 - **Systematic Ablation CSV**: [`reports/dl_ablation_summary.csv`](reports/dl_ablation_summary.csv)
 - **Phase 2 Technical Report (PDF)**: [`reports/dl_report.pdf`](reports/dl_report.pdf)
@@ -112,7 +113,7 @@ Execute the five Phase 2 notebooks sequentially (GPU runtime recommended for `DL
 | `Sanitized hybrid` (negation pruned) | `0.4400` | 46 | 27 | 54 | 1267 | 0.9419 | 0.6301 | 0.4600 | 0.5318 | 0.7504 | **0.9478** | **0.6269** |
 
 #### Summary of Ablations, Corr2Cause & DAG Graph Evaluation
-- **Corr2Cause (`DistilBERT`, $N = 1,162$ test)**: `Accuracy = 0.8623`, `Pos F1 = 0.4366` (`Pos P = 0.5962`, `Pos R = 0.3444`), `Macro-F1 = 0.6791`, `ROC-AUC = 0.8594`, `PR-AUC = 0.5135`.
+- **Corr2Cause (`DistilBERT`, $N = 1,162$ test)**: `Accuracy = 0.8718`, `Pos F1 = 0.4772` (`Pos P = 0.6476`, `Pos R = 0.3778`), `Macro-F1 = 0.7021`, `ROC-AUC = 0.8794`, `PR-AUC = 0.5957` (`TN = 945, FP = 37, FN = 112, TP = 68`).
 - **Ablation Findings ([`reports/dl_ablation_summary.csv`](reports/dl_ablation_summary.csv))**:
   - Removing entity markers (`[E1]`, `[E2]`) drops PubMedBERT test Pos F1 from `0.4531` (`checkpoint-3723`, Epoch `3.0`) to `0.2970` (`checkpoint-2482`, Epoch `2.0`, `ROC-AUC: 0.8950 -> 0.7980`).
   - Unweighted cross-entropy collapses at default `0.50` `argmax` (`0` positives across all epochs); with joint validation epoch and threshold selection (`checkpoint-3723`, Epoch `3.0`, $\tau^* = 0.0800$), unweighted CE yields `Pos F1 = 0.4508` (`Pos P = 0.3819`, `Pos R = 0.5500`, `PR-AUC = 0.3743`), while dynamic weighting ($w_{\text{pos}} = 14.9871$) increases positive recall (`0.5800`) and `Pos F1` (`0.4531`).
@@ -126,8 +127,8 @@ Packaging metadata, verified model binaries, and reusable inference code live in
 - `aml_classifier.pkl` — Joblib-serialized sklearn `Pipeline` (`6,708` bytes; `BioCauseAMLFeatureExtractor` + `LogisticRegression(class_weight={0: 1.0, 1: 2.0})`).
 - `fusion_config.json` & `model_manifest.json` — Frozen validation parameters (`alpha_star = 0.25`, `threshold_star = 0.44`), feature specs, split counts, AML equivalence checks (`val_max_abs_diff = 1.11e-16`, `test_max_abs_diff = 1.00e-16`), and verified persistence status (`reload_and_inference_verified: true`).
 
-> [!NOTE] Binary Persistence & Security Policy
-> `.gitignore` is configured to **track** `DL/models/hybrid_biocause/` (including `model.safetensors` and `aml_classifier.pkl`) while keeping training `checkpoints/`, `*.pt`, `*.pth`, and `*.bin` ignored. `.gitattributes` already tracks `DL/models/hybrid_biocause/pubmedbert/model.safetensors` (`417.68 MB`) via **Git LFS** (ensure `git-lfs` is installed when cloning/pulling). Load `aml_classifier.pkl` only from trusted, verified project outputs because Joblib/pickle deserialization can execute arbitrary code.
+> [!NOTE]
+> **Binary Persistence & Security Policy:** `.gitignore` is configured to **track** `DL/models/hybrid_biocause/` (including `model.safetensors` and `aml_classifier.pkl`) while keeping training `checkpoints/`, `*.pt`, `*.pth`, and `*.bin` ignored. `.gitattributes` already tracks `DL/models/hybrid_biocause/pubmedbert/model.safetensors` (`417.68 MB`) via **Git LFS** (ensure `git-lfs` is installed when cloning/pulling). Load `aml_classifier.pkl` only from trusted, verified project outputs because Joblib/pickle deserialization can execute arbitrary code.
 
 ```python
 import joblib
@@ -180,13 +181,14 @@ causal-nlp-reasoning/
 │   ├── dl_biocause_pr_roc_curves.png   # Comparative PR & ROC curve plot
 │   ├── dl_biocause_model_comparison.png # Model paradigm Pos F1 & TP/FP comparison
 │   ├── dl_biocause_confusion_matrices.png # Held-out test confusion matrices
+│   ├── dl_corr2cause_confusion_matrix.png # Corr2Cause DistilBERT test confusion matrix
 │   ├── dl_biocause_bayesian_dag_motif.png # Illustrative 3-node Bayesian do-calculus diagram
 │   ├── dl_report.pdf                   # Phase 2 deep learning & hybrid pipeline report
 │   ├── dl_phase.pptx                   # Phase 2 presentation deck
 │   ├── aml_report.pdf                  # Phase 1 AML technical report
 │   └── aml_phase.pptx                  # Phase 1 presentation deck
 ├── tests/
-│   └── test_phase1_baseline.py         # 16 automated unit, corpus, metric & notebook verification tests
+│   └── test_phase1_baseline.py         # Phase 1 unit, corpus, metric & notebook verification suite
 ├── requirements.txt                    # Phase 1 dependencies
 └── requirements-dl.txt                 # Phase 2 deep learning dependencies
 ```
@@ -204,7 +206,7 @@ python -m spacy download en_core_web_sm
 # 2. Install Phase 2 deep learning dependencies (Colab/GPU recommended; keep pre-installed CUDA torch)
 pip install -r requirements-dl.txt
 
-# 3. Run the 16-test automated Phase 1 verification suite
+# 3. Run the Phase 1 verification suite manually if needed
 python tests/test_phase1_baseline.py
 ```
 

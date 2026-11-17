@@ -204,7 +204,7 @@ The candidate generation process results in severe class imbalance:
   - **Test split**: 100 positive / 1,294 negative = **12.94:1 ratio** (Total: 1,394).
 
 To prevent the model from collapsing to the majority negative class, positive class loss weights must be computed dynamically strictly from model-eligible training data:
-$$\text{pos\_weight} = \frac{N_{\text{eligible, train, neg}}}{N_{\text{eligible, train, pos}}} = \frac{9307}{621} \approx 14.9871$$
+$$w_{\text{pos}} = \frac{N_{\text{eligible, train, neg}}}{N_{\text{eligible, train, pos}}} = \frac{9307}{621} \approx 14.9871$$
 Weights must **never** be derived using validation or test split labels.
 
 ---
@@ -476,17 +476,29 @@ All candidate-level evaluations strictly preserve the model-eligible test partit
 | **Validation-selected hybrid ($\alpha^*=0.25$)** | 0.4400 | 49 | 30 | 51 | 1264 | 0.9419 | 0.6203 | 0.4900 | 0.5475 | 0.7582 | **0.9478** | **0.6269** |
 | **Sanitized hybrid** | 0.4400 | 46 | 27 | 54 | 1267 | 0.9419 | 0.6301 | 0.4600 | 0.5318 | 0.7504 | **0.9478** | **0.6269** |
 
+![BioCause Precision-Recall and ROC Curves](../reports/dl_biocause_pr_roc_curves.png)
+*Figure 1 (`DL_05`): Precision-Recall and ROC curves across standalone AML, PubMedBERT, and validation-selected hybrid fusion on the held-out BioCause test split ($N = 1,394$).*
+
+![BioCause Model Paradigm Comparison](../reports/dl_biocause_model_comparison.png)
+*Figure 2 (`DL_05`): Positive-class Precision, Recall, F1, and absolute TP vs. FP counts across all six evaluated BioCause paradigms.*
+
+![BioCause Held-Out Test Confusion Matrices](../reports/dl_biocause_confusion_matrices.png)
+*Figure 3 (`DL_05`): Held-out BioCause test confusion matrices ($N = 1,394$, $100$ positives) showing false-positive reduction from PubMedBERT (`FP=98`) to validation-selected hybrid (`FP=30`).*
+
 ### 17.2 Independent Corr2Cause Stream Benchmark (N=1,162 Test Instances)
-- **Accuracy**: `0.8623` (`1002 / 1162`)
-- **Macro-F1**: `0.6791` (`Macro Precision`: `0.7423`, `Macro Recall`: `0.6508`)
-- **Entailed (Class 1) F1**: `0.4366` (`Pos Precision`: `0.5962`, `Pos Recall`: `0.3444`; `TP=62, FP=42, FN=118, TN=940`)
-- **ROC-AUC**: `0.8594` | **PR-AUC**: `0.5135`
+- **Accuracy**: `0.8718` (`1013 / 1162`)
+- **Macro-F1**: `0.7021` (`Macro Precision`: `0.7708`, `Macro Recall`: `0.6700`)
+- **Entailed (Class 1) F1**: `0.4772` (`Pos Precision`: `0.6476`, `Pos Recall`: `0.3778`; `TP=68, FP=37, FN=112, TN=945`)
+- **ROC-AUC**: `0.8794` | **PR-AUC**: `0.5957`
 - **Disaggregated by Variable Count**:
   - `N=2`: `6` instances (`TP=0, FP=1, FN=0, TN=5`), `Accuracy=0.8333`, `Pos F1=0.0000`, `Macro-F1=0.4545`
-  - `N=3`: `48` instances (`TP=3, FP=8, FN=0, TN=37`), `Accuracy=0.8333`, `Pos P=0.2727`, `Pos R=1.0000`, `Pos F1=0.4286`, `Macro-F1=0.6655`, `ROC-AUC=0.9111`, `PR-AUC=0.5278`
-  - `N=4`: `72` instances (`TP=0, FP=8, FN=0, TN=64`), `Accuracy=0.8889`, `Pos F1=0.0000`, `Macro-F1=0.4706`
-  - `N=5`: `514` instances (`TP=31, FP=17, FN=26, TN=440`), `Accuracy=0.9163`, `Pos P=0.6458`, `Pos R=0.5439`, `Pos F1=0.5905`, `Macro-F1=0.7719`, `ROC-AUC=0.9317`, `PR-AUC=0.6806`
-  - `N=6`: `522` instances (`TP=28, FP=8, FN=92, TN=394`), `Accuracy=0.8084`, `Pos P=0.7778`, `Pos R=0.2333`, `Pos F1=0.3590`, `Macro-F1=0.6232`, `ROC-AUC=0.7539`, `PR-AUC=0.5295`
+  - `N=3`: `48` instances (`TP=3, FP=7, FN=0, TN=38`), `Accuracy=0.8542`, `Pos P=0.3000`, `Pos R=1.0000`, `Pos F1=0.4615`, `Macro-F1=0.6886`, `ROC-AUC=0.9778`, `PR-AUC=0.8333`
+  - `N=4`: `72` instances (`TP=0, FP=1, FN=0, TN=71`), `Accuracy=0.9861`, `Pos F1=0.0000`, `Macro-F1=0.4965`
+  - `N=5`: `514` instances (`TP=36, FP=22, FN=21, TN=435`), `Accuracy=0.9163`, `Pos P=0.6207`, `Pos R=0.6316`, `Pos F1=0.6261`, `Macro-F1=0.7895`, `ROC-AUC=0.9423`, `PR-AUC=0.7074`
+  - `N=6`: `522` instances (`TP=29, FP=6, FN=91, TN=396`), `Accuracy=0.8142`, `Pos P=0.8286`, `Pos R=0.2417`, `Pos F1=0.3742`, `Macro-F1=0.6325`, `ROC-AUC=0.7666`, `PR-AUC=0.5497`
+
+![Corr2Cause DistilBERT Test Confusion Matrix](../reports/dl_corr2cause_confusion_matrix.png)
+*Figure 4 (`DL_02`): Held-out Corr2Cause test confusion matrix (`TN=945, FP=37, FN=112, TP=68`, $N = 1,162$) for the independent `distilbert-base-uncased` entailment stream.*
 
 ### 17.3 Core 4-Dimensional Ablation Results (`reports/dl_ablation_summary.csv`)
 1. **Argument Markers**: Removing `[E1]...[/E1]` and `[E2]...[/E2]` markers (`No entity markers`, `checkpoint-2482`, Epoch `2.0`, $\tau^* = 0.0593$) drops test Pos F1 from `0.4531` to `0.2970` (`-0.1561`), ROC-AUC from `0.8950` to `0.7980`, and PR-AUC from `0.3744` to `0.1941`.
@@ -500,6 +512,20 @@ All candidate-level evaluations strictly preserve the model-eligible test partit
 - **Acyclic Causal DAG (Post Cycle-Breaking)**: `69` edges (`TP=46, FP=23, FN=54`, `Precision=0.6667`, `Recall=0.4600`, `F1=0.5444`, `Is DAG: True`)
 - **Pruning Audit**: `4` bidirectional conflicts resolved (`0` self-loops, `0` cycle feedback edges) — all `4` removed edges were false positives while preserving all `46` true positives.
 - **Empirical Structure vs. Illustrative Synthetic CPDs**: The empirical extracted `G_dag` (`69` edges) compiles structurally into `pgmpy.models.DiscreteBayesianNetwork`, while the quantitative $do$-calculus examples (`DL_05` Section 7 `Sensor -> Regulator -> Resistance`: `Baseline P(Resistance=1) = 0.4242`, observational `P(Resistance=1 | Sensor=1) = 0.7200` [`+0.2958`], interventional `P(Resistance=1 | do(Regulator=1)) = 0.8500` [`+0.4258`]) use explicitly synthetic CPDs.
+
+![Illustrative Bayesian Network DAG Motif](../reports/dl_biocause_bayesian_dag_motif.png)
+*Figure 5 (`DL_05`): Illustrative 3-node Bayesian Network motif (`Sensor -> Regulator -> Resistance`) demonstrating Pearl's $do$-calculus using explicitly synthetic CPDs (separate from the empirical `112`-node, `69`-edge BioCause DAG).*
+
+### 17.5 Exported Reports & Visual Asset Inventory (`../reports/`)
+- [`../reports/dl_final_benchmark_summary.csv`](../reports/dl_final_benchmark_summary.csv) — Consolidated BioCause candidate-level benchmark table (`N = 1,394`).
+- [`../reports/dl_ablation_summary.csv`](../reports/dl_ablation_summary.csv) — 7-row systematic ablation summary.
+- [`../reports/dl_biocause_pr_roc_curves.png`](../reports/dl_biocause_pr_roc_curves.png) — Precision-Recall and ROC curves (`DL_05`).
+- [`../reports/dl_biocause_model_comparison.png`](../reports/dl_biocause_model_comparison.png) — Positive-class Precision/Recall/F1 and TP vs. FP comparison (`DL_05`).
+- [`../reports/dl_biocause_confusion_matrices.png`](../reports/dl_biocause_confusion_matrices.png) — 2×3 held-out BioCause confusion matrices (`DL_05`).
+- [`../reports/dl_corr2cause_confusion_matrix.png`](../reports/dl_corr2cause_confusion_matrix.png) — Held-out Corr2Cause DistilBERT confusion matrix (`DL_02`).
+- [`../reports/dl_biocause_bayesian_dag_motif.png`](../reports/dl_biocause_bayesian_dag_motif.png) — Illustrative synthetic-CPD Bayesian Network $do$-calculus diagram (`DL_05`).
+- [`../reports/DL_FINAL_EXECUTION_AUDIT.md`](../reports/DL_FINAL_EXECUTION_AUDIT.md) — Independent execution and verification audit report.
+- [`../reports/dl_report.pdf`](../reports/dl_report.pdf) & [`../reports/dl_phase.pptx`](../reports/dl_phase.pptx) — Phase 2 technical report and presentation deck.
 
 ---
 
@@ -516,5 +542,5 @@ The deployable hybrid BioCause bundle lives in `DL/models/hybrid_biocause/` (doc
 1. Run `DL/DL_03_biocause_pubmedbert.ipynb` Section 9 (`id=0b9968aa`) or standalone Section 10 recovery cell (`id=c94e21b0`) to serialize SafeTensors weights from `checkpoint-3723` on CPU and verify reload + validation sanity inference.
 2. Run `DL/DL_04_hybrid_graph_integration.ipynb` Section 11 (`id=b402e8c3`) and Section 12 (`id=f829a1d7`) to serialize `aml_classifier.pkl`, bundle `pubmedbert/`, verify validation-slice hybrid inference without accessing test labels, and mark `reload_and_inference_verified: true` in `model_manifest.json`.
 
-> [!WARNING] Pickle Security
-> Only load `aml_classifier.pkl` (`joblib.load`) from trusted, verified project outputs. Never serialize HuggingFace transformer models via `pickle` or `joblib`.
+> [!WARNING]
+> **Pickle Security:** Only load `aml_classifier.pkl` (`joblib.load`) from trusted, verified project outputs. Never serialize HuggingFace transformer models via `pickle` or `joblib`.
